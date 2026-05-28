@@ -77,5 +77,3 @@ $ while sleep .2; do \
                                                  Thu May 28 10:23:24 2026
                                         github.com/rtoax/test-linux v1.1.0
 ```
-
-More to see https://github.com/Rtoax/test-linux/tree/main/tools/ncurses/tools
