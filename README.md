@@ -3,6 +3,8 @@ ncurses-tools
 
 # Usage Example
 
+[Examples](./examples.mp4)
+
 ## Loadavg
 
 ```bash
