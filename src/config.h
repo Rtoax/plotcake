@@ -13,10 +13,35 @@ enum {
 	C_MAX,
 };
 
+/* Initial plot boundary */
 #define BND_TOP 1
 #define BND_BOTTOM 4
 #define BND_LEFT 7
 #define BND_RIGHT 6
+
+/* TODO: support more line type */
+#ifdef NOACS
+#define T_HLINE '-'
+#define T_VLINE '|'
+#define T_LLCR 'L'
+#define T_RARR '>'
+#define T_UARR '^'
+#else
+#define T_HLINE ACS_HLINE
+#define T_VLINE ACS_VLINE
+#define T_LLCR ACS_LLCORNER
+#define T_RARR ACS_RARROW
+#define T_UARR ACS_UARROW
+#endif
+
+#define U2500 "─"
+#define U2502 "│"
+#define U250C "┌"
+#define U2510 "┐"
+#define U2514 "└"
+#define U2518 "┘"
+
+#define W_U2502 L"│"
 
 #define U2501 "━"
 #define U2503 "┃"
@@ -45,4 +70,5 @@ enum {
 		___wch;                                  \
 	})
 
+#define WCH_U2502 WCH(W_U2502)
 #define WCH_U2503 WCH(W_U2503)

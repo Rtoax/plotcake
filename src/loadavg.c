@@ -7,9 +7,11 @@
  *
  * see also
  * https://github.com/rtoax/ncurses-tools
- * github.com/rtoax/test-linux/scripts/loadavg.sh
+ * https://github.com/rtoax/test-linux scripts/loadavg.sh
+ *
+ * relative repository:
  * ttyplot: https://github.com/tenox7/ttyplot.git
- *          ttyplot is not good enough.
+ *          ttyplot is not good enough, I don't like his drawing style.
  */
 #include <argp.h>
 #include <errno.h>
@@ -79,9 +81,9 @@ void broadcast_sig(int signo)
 
 static void loadavg_create(struct lgroup *lg, void *arg)
 {
-	new_line(lg, "load1", C_RED);
-	new_line(lg, "load5", C_GREEN);
-	new_line(lg, "load15", C_BLUE);
+	new_line(lg, "load1", C_RED, &unicode_bold_line_ops);
+	new_line(lg, "load5", C_GREEN, &unicode_bold_line_ops);
+	new_line(lg, "load15", C_BLUE, &unicode_bold_line_ops);
 }
 
 static void loadavg_update(struct lgroup *lg, void *arg)
@@ -89,24 +91,27 @@ static void loadavg_update(struct lgroup *lg, void *arg)
 	double avg[3];
 
 	getloadavg(avg, 3);
+#ifdef DEBUG
+	struct plot *p = lg->plot;
+#endif
 
 	int i = 0;
 	for_each_line(lg, line)
 	{
-		plot_append_val(lg->plot, line, avg[i]);
+		line_add(line, avg[i]);
 #ifdef DEBUG
-		mvprintw(i + 1, BND_LEFT + 1, "- %d - %f - %lf~%lf",
+		mvprintw(i + 1, p->bnd.left + 1, "- %d - %f - %lf~%lf",
 			 line->count, avg[i], line->min->v, line->max->v);
 #endif
 		i++;
 	}
 #ifdef DEBUG
-	mvprintw(i + 1, BND_LEFT + 1, "- %s", data_from_stdin);
+	mvprintw(i + 1, p->bnd.left + 1, "- %s", data_from_stdin);
 
-	mvprintw(lg->plot->height - BND_BOTTOM + 2, BND_LEFT + 1,
+	mvprintw(p->height - p->bnd.bottom + 2, p->bnd.left + 1,
 		 "%.2f %.2f %.2f, row %d (%d), col %d (%d), key '%d=%c'\n",
-		 avg[0], avg[1], avg[2], LINES, lg->plot->plotheight, COLS,
-		 lg->plot->plotwidth, key, key);
+		 avg[0], avg[1], avg[2], LINES, p->plotheight, COLS,
+		 p->plotwidth, key, key);
 #endif
 }
 
@@ -221,6 +226,12 @@ int main(int argc, char *argv[])
 		FD_SET(datafd, &readfds);
 		if (maxfd < datafd)
 			maxfd = datafd;
+		/**
+		 * If stdin is used to transfer data, then the refresh interval
+		 * is unnecessary and must be set to 0 so that it can pass the
+		 * check in the redraw_screen() function.
+		 */
+		plot.interval_sec = 0;
 	} else {
 		/**
 		 * When we read data from stdin, we no longer need a timer to
@@ -290,7 +301,8 @@ int main(int argc, char *argv[])
 		lg->ops.create(lg, lg->ops.arg);
 	}
 
-	plot_update_size(&plot);
+	plot_update_size(&plot, true);
+	plot_update_data(&plot);
 	redraw_screen(&plot);
 
 	/* main loop */
@@ -316,6 +328,7 @@ int main(int argc, char *argv[])
 			uint64_t exp;
 			read(timerfd, &exp, sizeof(exp));
 			redraw = true;
+			plot_update_data(&plot);
 		} else if (ret > 0 && FD_ISSET(tmoutfd, &fds)) {
 			uint64_t exp;
 			read(tmoutfd, &exp, sizeof(exp));
@@ -333,7 +346,7 @@ int main(int argc, char *argv[])
 					initscr();
 					erase();
 					refresh();
-					plot_update_size(&plot);
+					plot_update_size(&plot, false);
 					redraw = true;
 				}
 			}
@@ -345,6 +358,7 @@ int main(int argc, char *argv[])
 				/* TODO: parse data and plot */
 				redraw = true;
 			}
+			plot_update_data(&plot);
 		} else
 			continue;
 

@@ -4,30 +4,20 @@
 #include <curses.h>
 #include <ncurses.h>
 #include <stdarg.h>
+#include <stdbool.h>
 #include "config.h"
 #include "value.h"
-
-#ifdef NOACS
-#define T_HLINE '-'
-#define T_VLINE '|'
-#define T_LLCR 'L'
-#define T_RARR '>'
-#define T_UARR '^'
-#else
-#define T_HLINE ACS_HLINE
-#define T_VLINE ACS_VLINE
-#define T_LLCR ACS_LLCORNER
-#define T_RARR ACS_RARROW
-#define T_UARR ACS_UARROW
-#endif
 
 struct plot {
 	char *title;
 	char *label_x;
 	char *label_y;
+	struct {
+		int top, bottom, left, right;
+	} bnd, prev_max;
 	int height, width;
 	int plotheight, plotwidth;
-	int interval_sec;
+	int prev_sec, interval_sec;
 	struct lgroup *lghead, *lgtail;
 	int lgcount;
 };
@@ -41,14 +31,12 @@ void __plot_warning(const struct plot *p, char *fmt, ...);
 
 int plot_add(struct plot *p, struct lgroup *lg, void *lg_ops_arg);
 
-void plot_update_size(struct plot *p);
+void plot_update_size(struct plot *p, bool init);
 void plot_draw_axes(const struct plot *p);
 void plot_draw_title(const struct plot *p);
-void plot_paint_line(const struct plot *p, struct line *load, const char *label,
-		     double max, double min, chtype color);
-void plot_append_val(const struct plot *p, struct line *l, double v);
 
-void paint_plot(const struct plot *p);
-void redraw_screen(const struct plot *p);
+void paint_plot(struct plot *p);
+void plot_update_data(struct plot *p);
+void redraw_screen(struct plot *p);
 
 void init_flavor(void);

@@ -45,29 +45,31 @@ void init_flavor(void)
 	}
 }
 
-void plot_update_size(struct plot *p)
+void plot_update_size(struct plot *p, bool init)
 {
+	if (init) {
+		p->bnd.top = BND_TOP;
+		p->bnd.bottom = BND_BOTTOM;
+		p->bnd.left = BND_LEFT;
+		p->bnd.right = BND_RIGHT;
+	} else {
+		/**
+		 * Just use left and right to make sure y axis values and line
+		 * names show correctly.
+		 */
+		p->bnd.left = p->bnd.left > p->prev_max.left ? p->bnd.left :
+							       p->prev_max.left;
+		p->bnd.right = p->bnd.right > p->prev_max.right ?
+				       p->bnd.right :
+				       p->prev_max.right;
+	}
+
 	getmaxyx(stdscr, p->height, p->width);
-	p->plotheight = p->height - BND_BOTTOM - BND_TOP;
-	p->plotwidth = p->width - BND_LEFT - BND_RIGHT;
-}
+	p->plotheight = p->height - p->bnd.bottom - p->bnd.top;
+	p->plotwidth = p->width - p->bnd.left - p->bnd.right;
 
-void plot_append_val(const struct plot *p, struct line *l, double v)
-{
-	struct timeval now;
-	gettimeofday(&now, NULL);
-
-	/* Only add new value when the time interval is at least 1 second */
-	if (l->tail && l->tail->tv.tv_sec == now.tv_sec)
-		return;
-	enqueue_val(l, v);
-
-	/**
-	 * Due to the limited width of the screen, we removed unnecessary
-	 * history records. TODO: maybe we should keep the old values.
-	 */
-	for (int i = p->plotwidth - 2; i < l->count; i++)
-		dequeue_val(l);
+	p->prev_max.left = BND_LEFT;
+	p->prev_max.right = BND_RIGHT;
 }
 
 void __plot_warning(const struct plot *p, char *fmt, ...)
@@ -82,11 +84,11 @@ void __plot_warning(const struct plot *p, char *fmt, ...)
 	attroff(flavor[C_RED] | A_BOLD);
 }
 
-void plot_paint_line(const struct plot *p, struct line *ln, const char *label,
-		     double max, double min, chtype color)
+static void paint_line(struct plot *p, struct line *ln, double max, double min)
 {
 	int i = 0;
 	int prev_h = -1;
+	chtype color = flavor[ln->color];
 
 	for_each_value(ln, v)
 	{
@@ -100,11 +102,12 @@ void plot_paint_line(const struct plot *p, struct line *ln, const char *label,
 			span = max - min;
 		}
 
-		int h = p->plotheight + BND_TOP - 1 -
+		int h = p->plotheight + p->bnd.top - 1 -
 			diff * (p->plotheight - 2) / span;
-		int w = p->plotwidth + BND_LEFT - ln->count + i;
+		int w = p->plotwidth + p->bnd.left - ln->count + i;
+
 		attron(color);
-		mvprintw(h, w, U2501);
+		ln->ops->horizon(ln, h, w);
 		attroff(color);
 
 		/**
@@ -114,17 +117,15 @@ void plot_paint_line(const struct plot *p, struct line *ln, const char *label,
 		 */
 		if (prev_h != -1) {
 			attron(color);
-			cchar_t wch_vline = WCH_U2503;
 			if (prev_h > h) {
-				mvprintw(prev_h, w, U251B);
-				mvprintw(h, w, U250F);
-				mvvline_set(h + 1, w, &wch_vline,
-					    prev_h - h - 1);
+				ln->ops->lrcorner(ln, prev_h, w);
+				ln->ops->ulcorner(ln, h, w);
+				ln->ops->vertical(ln, h + 1, w, prev_h - h - 1);
 			} else if (h > prev_h) {
-				mvprintw(prev_h, w, U2513);
-				mvprintw(h, w, U2517);
-				mvvline_set(prev_h + 1, w, &wch_vline,
-					    h - prev_h - 1);
+				ln->ops->urcorner(ln, prev_h, w);
+				ln->ops->llcorner(ln, h, w);
+				ln->ops->vertical(ln, prev_h + 1, w,
+						  h - prev_h - 1);
 			}
 			attroff(color);
 		}
@@ -137,14 +138,22 @@ void plot_paint_line(const struct plot *p, struct line *ln, const char *label,
 		if ((i - 1) % 10 == 0) {
 			char buf[10];
 			strftime(buf, 10, "%T", localtime(&v->tv.tv_sec));
-			mvprintw(p->height - BND_BOTTOM + 1, w, "%s", buf);
+			mvprintw(p->height - p->bnd.bottom + 1, w, "%s", buf);
 		}
 
 		/* set y axis */
 		attron(color);
-		mvprintw(h, 0, "%.3f", v->v);
+		char sv[64];
+		int nc = snprintf(sv, 64, "%.3f", v->v);
+		if (p->prev_max.left < nc)
+			p->prev_max.left = nc;
+		mvprintw(h, 0, "%s", sv);
+
 		if (i == ln->count) {
-			mvprintw(h, w + 1, "%s", label);
+			mvprintw(h, w + 1, "%s", ln->name);
+			nc = strlen(ln->name);
+			if (p->prev_max.right < nc)
+				p->prev_max.right = nc;
 #ifdef DEBUG
 			mvprintw(h + 1, w + 1, "%d", ln->count);
 			mvprintw(h + 2, w + 1, "%.1f", ln->min->v);
@@ -162,22 +171,22 @@ void plot_draw_title(const struct plot *p)
 
 void plot_draw_axes(const struct plot *p)
 {
-	mvhline(p->plotheight + BND_TOP, BND_LEFT, T_HLINE, p->plotwidth);
-	mvvline(BND_TOP, BND_LEFT, T_VLINE, p->plotheight);
-	mvaddch(p->plotheight + BND_TOP, BND_LEFT, T_LLCR);
+	mvhline(p->plotheight + p->bnd.top, p->bnd.left, T_HLINE, p->plotwidth);
+	mvvline(p->bnd.top, p->bnd.left, T_VLINE, p->plotheight);
+	mvaddch(p->plotheight + p->bnd.top, p->bnd.left, T_LLCR);
 
-	mvaddch(BND_TOP, BND_LEFT, T_UARR);
-	mvprintw(BND_TOP, BND_LEFT, U25B2);
+	mvaddch(p->bnd.top, p->bnd.left, T_UARR);
+	mvprintw(p->bnd.top, p->bnd.left, U25B2);
 	if (p->label_y)
-		mvaddstr(BND_TOP - 1, BND_LEFT, p->label_y);
+		mvaddstr(p->bnd.top - 1, p->bnd.left, p->label_y);
 
-	mvprintw(p->plotheight + BND_TOP, p->plotwidth + BND_LEFT, U25BA);
+	mvprintw(p->plotheight + p->bnd.top, p->plotwidth + p->bnd.left, U25BA);
 	if (p->label_x)
-		mvaddstr(p->plotheight + BND_TOP + 1, p->plotwidth + BND_LEFT,
-			 p->label_x);
+		mvaddstr(p->plotheight + p->bnd.top + 1,
+			 p->plotwidth + p->bnd.left, p->label_x);
 }
 
-static void __paint_plot_lg(const struct plot *p, const struct lgroup *lg)
+static void __paint_plot_lg(struct plot *p, const struct lgroup *lg)
 {
 	double max = 0, min = 9999;
 
@@ -193,14 +202,14 @@ static void __paint_plot_lg(const struct plot *p, const struct lgroup *lg)
 	{
 		if (l->count <= 0)
 			continue;
-		plot_paint_line(p, l, l->name, max, min, flavor[l->color]);
+		paint_line(p, l, max, min);
 	}
 }
 
 /**
  * need erase() before, refresh() after
  */
-void paint_plot(const struct plot *p)
+void paint_plot(struct plot *p)
 {
 	plot_draw_title(p);
 	plot_draw_axes(p);
@@ -222,15 +231,33 @@ void paint_plot(const struct plot *p)
 	move(0, 0);
 }
 
-void redraw_screen(const struct plot *p)
+void plot_update_data(struct plot *p)
 {
-	erase();
+	struct timeval now;
+	gettimeofday(&now, NULL);
+
+	/**
+	 * The frequency of refreshing/adding data must not exceed the
+	 * constraint frequency; otherwise, skip the update.
+	 */
+	if (p->prev_sec && p->interval_sec &&
+	    now.tv_sec - p->prev_sec < p->interval_sec) {
+		return;
+	}
 
 	for_each_lg(p, lg)
 	{
 		lg->ops.update(lg, lg->ops.arg);
 	}
 
+	p->prev_sec = now.tv_sec;
+}
+
+void redraw_screen(struct plot *p)
+{
+	erase();
 	paint_plot(p);
 	refresh();
+
+	plot_update_size(p, false);
 }
