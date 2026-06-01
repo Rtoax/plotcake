@@ -1,8 +1,8 @@
 # AGENTS.md
 
-This file provides context for AI agents when working on the test-linux
+This file provides context for AI agents when working on the ncurses-tools
 codebase.
 
 ## Project overview
 
-The Test Linux project is the Linux test project.
+ncurses-tools.
