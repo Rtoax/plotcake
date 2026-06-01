@@ -32,18 +32,34 @@
 #include "plot.h"
 #include "stdin.h"
 
-const char argp_prog_doc[] = "USAGE: [-T|--title=<TITLE>] [-v|--verbose]\n";
+const char argp_prog_doc[] =
+	"USAGE: [-T|--title=<TITLE>] [-v|--verbose]\n"
+	"\n"
+	"EXAMPLES:\n"
+	"   $ ./loadavg        # Draw loadavg graph\n"
+	"   $ ./loadavg -M     # Draw memory usage graph\n"
+	"\n"
+	"   # Draw opened file number\n"
+	"   $ while sleep .5; do\n"
+	"	awk '{print $1}' /proc/sys/fs/file-nr\n"
+	"     done | ./loadavg --title 'Opened File Number' -l 'opened'\n"
+	"\n";
 
 static const struct argp_option opts[] = {
 	{ "title", 'T', "TITLE", 0, "Spedify title" },
 	{ "xlabel", 'x', "X LABEL", 0, "Spedify x axis label" },
 	{ "ylabel", 'y', "Y LABEL", 0, "Spedify y axis label" },
-	{ "lname", 'l', "LINE NAME", 0,
-	  "Spedify line names (may be listed multiple times)" },
+	{ "llabel", 'l', "LINE NAME", 0,
+	  "Spedify line label (may be listed multiple times)" },
+	{ "ltype", 'L', "LINE TYPE", 0,
+	  "Spedify line types, if an invalid value is entered, the supported line types will be listed (may be listed multiple times)" },
+	{ "lcolor", 'C', "LINE COLOR", 0,
+	  "Spedify line colors, if an invalid value is entered, the supported line colors will be listed (may be listed multiple times)" },
 	{ "ram", 'M', NULL, 1, "Display memory instead of loadavg" },
 	{ "interval", 'I', "INTERVAL SEC", 0, "Spedify interval seconds" },
 	{ "tmout", 't', "TIMEOUT SEC", 0, "Spedify timeout seconds" },
 	{ "verbose", 'v', NULL, 1, "Display detail" },
+	{ "version", 'V', NULL, 1, "Display version" },
 	{},
 };
 
@@ -53,12 +69,12 @@ static int done = false;
 static int ram = false;
 static int verbose = false;
 static int tmout_sec = -1;
+static int interval_sec = 1;
 
 static char data_from_stdin[256] = { 0 };
 
 struct plot plot = {
 	.title = NULL,
-	.interval_sec = 1,
 };
 
 void sig_handler(int signo)
@@ -81,9 +97,9 @@ void broadcast_sig(int signo)
 
 static void loadavg_create(struct lgroup *lg, void *arg)
 {
-	new_line(lg, "load1", C_RED, &unicode_bold_line_ops);
-	new_line(lg, "load5", C_GREEN, &unicode_bold_line_ops);
-	new_line(lg, "load15", C_BLUE, &unicode_bold_line_ops);
+	new_line(lg, "load1", nextcolor(C_RED));
+	new_line(lg, "load5", nextcolor(C_GREEN));
+	new_line(lg, "load15", nextcolor(C_BLUE));
 }
 
 static void loadavg_update(struct lgroup *lg, void *arg)
@@ -91,37 +107,35 @@ static void loadavg_update(struct lgroup *lg, void *arg)
 	double avg[3];
 
 	getloadavg(avg, 3);
-#ifdef DEBUG
-	struct plot *p = lg->plot;
-#endif
 
 	int i = 0;
 	for_each_line(lg, line)
 	{
 		line_add(line, avg[i]);
-#ifdef DEBUG
-		mvprintw(i + 1, p->bnd.left + 1, "- %d - %f - %lf~%lf",
-			 line->count, avg[i], line->min->v, line->max->v);
-#endif
 		i++;
 	}
-#ifdef DEBUG
-	mvprintw(i + 1, p->bnd.left + 1, "- %s", data_from_stdin);
-
-	mvprintw(p->height - p->bnd.bottom + 2, p->bnd.left + 1,
-		 "%.2f %.2f %.2f, row %d (%d), col %d (%d), key '%d=%c'\n",
-		 avg[0], avg[1], avg[2], LINES, p->plotheight, COLS,
-		 p->plotwidth, key, key);
-#endif
 }
 
-static const struct lgroup_operations loadavg_ops = {
+void loadavg_plot_debug(const struct lgroup *lg, void *arg)
+{
+	struct plot *p = lg->plot;
+	int i = 0;
+	for_each_line(lg, ln)
+	{
+		mvprintw(i + 1, p->bnd.left + 1, "%s: cnt=%d %lf~%lf", ln->name,
+			 ln->count, ln->min->v, ln->max->v);
+		i++;
+	}
+}
+
+static struct lgroup_operations loadavg_ops = {
 	.create = loadavg_create,
 	.update = loadavg_update,
+	.plot_debug = loadavg_plot_debug,
 };
 
 static struct lgroup lg_loadavg = {
-	.ops = loadavg_ops,
+	.ops = &loadavg_ops,
 };
 
 static error_t parse_arg(int opt, char *arg, struct argp_state *state)
@@ -131,7 +145,17 @@ static error_t parse_arg(int opt, char *arg, struct argp_state *state)
 		plot.title = arg;
 		break;
 	case 'l':
-		enqueue_lname(arg);
+		enqueue_llabel(arg);
+		break;
+	case 'L':
+		if (!ldraw_hasname(arg))
+			exit(EXIT_FAILURE);
+		enqueue_ltype(ldraw_name2type(arg));
+		break;
+	case 'C':
+		if (!hascolor_name(arg))
+			exit(EXIT_FAILURE);
+		enqueue_lcolor(color_name2n(arg));
 		break;
 	case 'x':
 		plot.label_x = arg;
@@ -147,8 +171,8 @@ static error_t parse_arg(int opt, char *arg, struct argp_state *state)
 		}
 		break;
 	case 'I':
-		plot.interval_sec = atoi(arg);
-		if (plot.interval_sec <= 0) {
+		interval_sec = atoi(arg);
+		if (interval_sec <= 0) {
 			fprintf(stderr, "ERROR: bad -I value\n");
 			exit(EXIT_FAILURE);
 		}
@@ -158,6 +182,10 @@ static error_t parse_arg(int opt, char *arg, struct argp_state *state)
 		break;
 	case 'v':
 		verbose = true;
+		break;
+	case 'V':
+		printf("%s\n", MY_VERSION);
+		exit(EXIT_SUCCESS);
 		break;
 	case ARGP_KEY_ARG:
 		break;
@@ -226,20 +254,14 @@ int main(int argc, char *argv[])
 		FD_SET(datafd, &readfds);
 		if (maxfd < datafd)
 			maxfd = datafd;
-		/**
-		 * If stdin is used to transfer data, then the refresh interval
-		 * is unnecessary and must be set to 0 so that it can pass the
-		 * check in the redraw_screen() function.
-		 */
-		plot.interval_sec = 0;
 	} else {
 		/**
 		 * When we read data from stdin, we no longer need a timer to
 		 * trigger the update.
 		 */
 		timerfd = timerfd_create(CLOCK_REALTIME, TFD_CLOEXEC);
-		struct itimerspec to = { { plot.interval_sec, 0 },
-					 { plot.interval_sec, 0 } };
+		struct itimerspec to = { { interval_sec, 0 },
+					 { interval_sec, 0 } };
 		timerfd_settime(timerfd, 0, &to, NULL);
 		FD_SET(timerfd, &readfds);
 		if (maxfd < timerfd)
@@ -296,11 +318,7 @@ int main(int argc, char *argv[])
 		plot_add(&plot, &lg_stdin, &stdarg);
 	}
 
-	for_each_lg(&plot, lg)
-	{
-		lg->ops.create(lg, lg->ops.arg);
-	}
-
+	plot_create_data(&plot);
 	plot_update_size(&plot, true);
 	plot_update_data(&plot);
 	redraw_screen(&plot);

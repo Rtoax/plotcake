@@ -7,10 +7,10 @@
 
 static void ram_create(struct lgroup *lg, void *arg)
 {
-	new_line(lg, "total", C_RED, &unicode_bold_line_ops);
-	new_line(lg, "free", C_GREEN, &unicode_bold_line_ops);
-	new_line(lg, "shared", C_BLUE, &unicode_bold_line_ops);
-	new_line(lg, "buff", C_CYAN, &unicode_bold_line_ops);
+	new_line(lg, "total", nextcolor(C_RED));
+	new_line(lg, "free", nextcolor(C_GREEN));
+	new_line(lg, "shared", nextcolor(C_BLUE));
+	new_line(lg, "buff", nextcolor(C_CYAN));
 }
 
 static void ram_update(struct lgroup *lg, void *arg)
@@ -33,11 +33,11 @@ static void ram_update(struct lgroup *lg, void *arg)
 	}
 }
 
-static const struct lgroup_operations ram_ops = {
+static struct lgroup_operations ram_ops = {
 	.create = ram_create,
 	.update = ram_update,
 };
 
 struct lgroup lg_ram = {
-	.ops = ram_ops,
+	.ops = &ram_ops,
 };

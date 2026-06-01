@@ -13,8 +13,16 @@ sigint() {
 }
 trap sigint INT
 
+# display all line type
 while sleep 0.05; do
-	seq 1 1 28
+	seq 1 1 $(./loadavg -L nonsense 2>/dev/null | wc -l)
+done | ./loadavg ${args[@]} $(./loadavg -L nonsense 2>/dev/null | sed 's/^/-L/g') \
+	-C red -C red
+
+#
+for i in 2 4 1 4 6 1 9; do
+	seq 1 1 $i
+	sleep .1
 done | ./loadavg ${args[@]}
 
 # display the loadavg
@@ -43,7 +51,7 @@ done | ./loadavg ${args[@]} --title 'Process Number' --xlabel 'Time' --ylabel 'N
 iostat_x() {
 	iostat | grep -e ^sd -e ^nvme -e ^vd | head -1
 }
-if which iostat 2>/dev/null; then
+if which iostat 2>&1 >/dev/null; then
 	while sleep .1; do
 		iostat_x | awk '{print $3, $4}'
 	done | ./loadavg ${args[@]} -T "$(iostat_x | awk '{print $1}') Read-Write" \

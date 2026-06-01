@@ -2,7 +2,9 @@
 /* Copyright (C) 2026 Rong Tao */
 #pragma once
 
-enum {
+#define MY_VERSION "v1.3.1"
+
+enum lcolor_enum {
 	C_GREEN,
 	C_RED,
 	C_CYAN,
@@ -11,6 +13,7 @@ enum {
 	C_BLUE,
 	C_YELLOW,
 	C_MAX,
+	C_UNKNOWN = C_MAX,
 };
 
 /* Initial plot boundary */
@@ -63,6 +66,17 @@ enum {
 #define W_U25BA L"►"
 #define W_U25C4 L"◄"
 
+#define U2580 "▀"
+#define U2584 "▄"
+#define U2588 "█"
+
+#define W_U2580 L"▀"
+#define W_U2584 L"▄"
+#define W_U2588 L"█"
+
+#define U2665 "♥"
+#define W_U2665 L"♥"
+
 #define WCH(W)                                           \
 	({                                               \
 		cchar_t ___wch;                          \
@@ -72,3 +86,5 @@ enum {
 
 #define WCH_U2502 WCH(W_U2502)
 #define WCH_U2503 WCH(W_U2503)
+#define WCH_U2588 WCH(W_U2588)
+#define WCH_U2665 WCH(W_U2665)

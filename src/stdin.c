@@ -12,7 +12,7 @@
 
 static char *skip(char *buf)
 {
-	while (*buf != '\0' && isspace(buf[0]))
+	while (*buf != '\0' && isspace(*buf))
 		buf++;
 	return buf;
 }
@@ -21,15 +21,15 @@ static void __add_line(struct lgroup *lg, int i)
 {
 	char name[64] = { 0 };
 	snprintf(name, 64, "line%d", i);
+	enum lcolor_enum color = nextcolor(i);
 
-	struct ldraw_ops *ldraw_operations[] = {
-		&unicode_bold_line_ops,
-		&unicode_bold_dashed_line_ops,
-		&unicode_line_ops,
-		&unicode_line_dashed_line_ops,
-	};
-	new_line(lg, name, i % C_MAX,
-		 ldraw_operations[(i / C_MAX) % ARRAY_SIZE(ldraw_operations)]);
+	if (i < get_nr_ltypes())
+		new_line(lg, name, color);
+	else {
+		int idx = (i - get_nr_ltypes()) / C_MAX;
+		idx %= LINE_TYPE_MAX;
+		new_line_ops(lg, name, color, ldraw_type2ops(idx));
+	}
 }
 
 static void stdin_create(struct lgroup *lg, void *arg)
@@ -43,64 +43,83 @@ static void stdin_create(struct lgroup *lg, void *arg)
 
 static void stdin_update(struct lgroup *lg, void *arg)
 {
-	int i;
+	int i, narg;
 	struct stdin_arg *a = arg;
 	double *values = malloc(sizeof(double) * a->nline);
 	char *buf = a->line_buff;
-	struct plot *p = lg->plot;
-
-#ifdef DEBUG
-	mvprintw(0, p->bnd.left + 1, "stdin: '%s'", a->line_buff);
-#endif
 
 	if (*buf == '\0')
 		return;
 
 	for (i = 0; i < a->nline && *buf != '\0'; i++) {
 		buf = skip(buf);
-
-		double v = strtod(buf, &buf);
-		values[i] = v;
-#ifdef DEBUG
-		mvprintw(i + 1, p->bnd.left + 1, "- %lf", values[i]);
-#endif
+		values[i] = strtod(buf, &buf);
+		buf = skip(buf);
 	}
 
 	/* found more values, we could apped new line */
 	while (*buf != '\0') {
 		buf = skip(buf);
-		if (!isdigit(*buf)) {
-			if (*buf != '\0')
-				plot_warning(p, "stdin data syntax error: %s",
-					     a->line_buff);
+		if (!isdigit(*buf))
 			break;
-		}
 
 		__add_line(lg, i);
 
 		values = realloc(values, sizeof(double) * ++a->nline);
 		values[i++] = strtod(buf, &buf);
 	}
+	narg = i;
 
 	i = 0;
 	for_each_line(lg, line)
 	{
-		line_add(line, values[i]);
+		/**
+		 * The number of data items read from stdin may change. If it
+		 * is less than the previous number, then we need to add the old
+		 * data. If it's more than before, we've already added lines
+		 * above it.
+		 */
+		if (i < narg) {
+			line_add(line, values[i]);
+		} else {
+			line_add(line, line->tail->v);
+		}
 		i++;
-#ifdef DEBUG
-		mvprintw(a->nline + i + 1, p->bnd.left + 1,
-			 "- %d - %f - %lf~%lf", line->count, values[i],
-			 line->min->v, line->max->v);
-#endif
 	}
 	free(values);
 }
 
-static const struct lgroup_operations stdin_ops = {
+static void stdin_plot_debug(const struct lgroup *lg, void *arg)
+{
+	struct stdin_arg *a = arg;
+	struct plot *p = lg->plot;
+	int i;
+
+	mvprintw(0, p->bnd.left + 1, "lgroup cnt %d, arg nline %d", lg->count,
+		 a->nline);
+	mvprintw(1, p->bnd.left + 1, "stdin: '%s'", a->line_buff);
+
+	i = 0;
+	for_each_line(lg, line)
+	{
+		if (line->count <= 0)
+			mvprintw(i + 2, p->bnd.left + 1, "%s: %d", line->name,
+				 line->count);
+		else
+			mvprintw(i + 2, p->bnd.left + 1,
+				 "%s: %d - %f - %lf~%lf", line->name,
+				 line->count, line->tail->v, line->min->v,
+				 line->max->v);
+		i++;
+	}
+}
+
+static struct lgroup_operations stdin_ops = {
 	.create = stdin_create,
 	.update = stdin_update,
+	.plot_debug = stdin_plot_debug,
 };
 
 struct lgroup lg_stdin = {
-	.ops = stdin_ops,
+	.ops = &stdin_ops,
 };

@@ -1,16 +1,17 @@
 // SPDX-License-Identifier: (LGPL-2.1 OR BSD-2-Clause)
 /* Copyright (C) 2026 Rong Tao */
 #include <assert.h>
+#include <float.h>
 #include <stdio.h>
 #include <string.h>
 #include "plot.h"
 
 chtype flavor[C_MAX] = { 0 };
-static const char *verstring = "github.com/rtoax/test-linux v1.1.0";
+static const char *verstring = "github.com/rtoax/test-linux " MY_VERSION;
 
 int plot_add(struct plot *p, struct lgroup *lg, void *lg_ops_arg)
 {
-	assert(lg->ops.create && "lgroup ops is not set, set it first");
+	assert(lg->ops->create && "lgroup ops is not set, set it first");
 
 	if (!p->lghead) {
 		p->lghead = lg;
@@ -21,7 +22,7 @@ int plot_add(struct plot *p, struct lgroup *lg, void *lg_ops_arg)
 	p->lgcount++;
 	p->lgtail = lg;
 	lg->plot = p;
-	lg->ops.arg = lg_ops_arg;
+	lg->ops->arg = lg_ops_arg;
 	return 0;
 }
 
@@ -65,8 +66,14 @@ void plot_update_size(struct plot *p, bool init)
 	}
 
 	getmaxyx(stdscr, p->height, p->width);
+
 	p->plotheight = p->height - p->bnd.bottom - p->bnd.top;
 	p->plotwidth = p->width - p->bnd.left - p->bnd.right;
+
+	if (p->heightmax < p->height)
+		p->heightmax = p->height;
+	if (p->widthmax < p->width)
+		p->widthmax = p->width;
 
 	p->prev_max.left = BND_LEFT;
 	p->prev_max.right = BND_RIGHT;
@@ -93,6 +100,23 @@ static void paint_line(struct plot *p, struct line *ln, double max, double min)
 	for_each_value(ln, v)
 	{
 		double span = .0f, diff = .0f;
+
+		/**
+		 * The number of data points may be greater than the horizontal
+		 * size of the plotting area, so it is necessary to first skip
+		 * the data points that exceed the plotting area.
+		 *
+		 *     |------------------------| count
+		 *         |--------------------| plotwidth
+		 *
+		 *     ^^^^^ skip
+		 *
+		 * see also __paint_plot_lg().
+		 */
+		if (i <= ln->count - p->plotwidth) {
+			i++;
+			continue;
+		}
 
 		if (max == min || max == 0.0 || max < min) {
 			diff = 0;
@@ -188,22 +212,33 @@ void plot_draw_axes(const struct plot *p)
 
 static void __paint_plot_lg(struct plot *p, const struct lgroup *lg)
 {
-	double max = 0, min = 9999;
+	double max = -DBL_MAX, min = DBL_MAX;
 
 	/* find min and max first */
 	for_each_line(lg, l)
 	{
 		if (l->count <= 0)
 			continue;
-		max = max < l->max->v ? l->max->v : max;
-		min = min > l->min->v ? l->min->v : min;
+
+		/* see also line count and plotwidth check in paint_line() */
+		double _max = line_range_max(l, l->count - p->plotwidth,
+					     p->plotwidth);
+		double _min = line_range_min(l, l->count - p->plotwidth,
+					     p->plotwidth);
+		max = max < _max ? _max : max;
+		min = min > _min ? _min : min;
 	}
+
 	for_each_line(lg, l)
 	{
 		if (l->count <= 0)
 			continue;
 		paint_line(p, l, max, min);
 	}
+#ifdef DEBUG
+	if (lg->ops->plot_debug)
+		lg->ops->plot_debug(lg, lg->ops->arg);
+#endif
 }
 
 /**
@@ -228,29 +263,29 @@ void paint_plot(struct plot *p)
 
 	mvaddstr(p->height - 1, p->width - strlen(verstring) - 1, verstring);
 
+#ifdef DEBUG
+	mvprintw(p->height - 2, 0, "plot: (%d,%d) max(%d,%d) plot(%d,%d)",
+		 p->height, p->width, p->heightmax, p->widthmax, p->plotheight,
+		 p->plotwidth);
+#endif
+
 	move(0, 0);
+}
+
+void plot_create_data(struct plot *p)
+{
+	for_each_lg(p, lg)
+	{
+		lg->ops->create(lg, lg->ops->arg);
+	}
 }
 
 void plot_update_data(struct plot *p)
 {
-	struct timeval now;
-	gettimeofday(&now, NULL);
-
-	/**
-	 * The frequency of refreshing/adding data must not exceed the
-	 * constraint frequency; otherwise, skip the update.
-	 */
-	if (p->prev_sec && p->interval_sec &&
-	    now.tv_sec - p->prev_sec < p->interval_sec) {
-		return;
-	}
-
 	for_each_lg(p, lg)
 	{
-		lg->ops.update(lg, lg->ops.arg);
+		lg->ops->update(lg, lg->ops->arg);
 	}
-
-	p->prev_sec = now.tv_sec;
 }
 
 void redraw_screen(struct plot *p)

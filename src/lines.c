@@ -96,7 +96,76 @@ static void unicode_lrcorner(struct line *ln, int y, int x)
 	mvprintw(y, x, U2518);
 }
 
-struct ldraw_ops unicode_bold_line_ops = {
+static void utf8_horizon(struct line *ln, int y, int x)
+{
+	mvprintw(y, x, "-");
+}
+
+static void utf8_vertical(struct line *ln, int y, int x, int n)
+{
+	mvvline(y, x, '|', n);
+}
+
+static void utf8_cross(struct line *ln, int y, int x)
+{
+	mvprintw(y, x, "+");
+}
+
+static void unicode_boldbold_horizon(struct line *ln, int y, int x)
+{
+	mvprintw(y, x, U2584);
+}
+
+static void unicode_boldbold_vertical(struct line *ln, int y, int x, int n)
+{
+	cchar_t wch_vline = WCH_U2588;
+	mvvline_set(y, x, &wch_vline, n);
+}
+
+static void unicode_boldbold_corner1(struct line *ln, int y, int x)
+{
+	mvprintw(y, x, U2584);
+}
+
+static void unicode_boldbold_corner2(struct line *ln, int y, int x)
+{
+	cchar_t wch_vline = WCH_U2588;
+	mvvline_set(y, x, &wch_vline, 1);
+}
+
+static void unicode_heart(struct line *ln, int y, int x)
+{
+	mvprintw(y, x, U2665);
+}
+
+static void unicode_heart_vertical(struct line *ln, int y, int x, int n)
+{
+	cchar_t wch_vline = WCH_U2665;
+	mvvline_set(y, x, &wch_vline, n);
+}
+
+const struct ldraw_ops unicode_heart_line_ops = {
+	.name = "unicode-heart",
+	.horizon = unicode_heart,
+	.vertical = unicode_heart_vertical,
+	.ulcorner = unicode_heart,
+	.llcorner = unicode_heart,
+	.urcorner = unicode_heart,
+	.lrcorner = unicode_heart,
+};
+
+const struct ldraw_ops unicode_boldbold_line_ops = {
+	.name = "unicode-boldbold",
+	.horizon = unicode_boldbold_horizon,
+	.vertical = unicode_boldbold_vertical,
+	.ulcorner = unicode_boldbold_corner1,
+	.llcorner = unicode_boldbold_corner2,
+	.urcorner = unicode_boldbold_corner1,
+	.lrcorner = unicode_boldbold_corner2,
+};
+
+const struct ldraw_ops unicode_bold_line_ops = {
+	.name = "unicode-bold",
 	.horizon = unicode_bold_horizon,
 	.vertical = unicode_bold_vertical,
 	.ulcorner = unicode_bold_ulcorner,
@@ -105,7 +174,8 @@ struct ldraw_ops unicode_bold_line_ops = {
 	.lrcorner = unicode_bold_lrcorner,
 };
 
-struct ldraw_ops unicode_bold_dashed_line_ops = {
+const struct ldraw_ops unicode_bold_dashed_line_ops = {
+	.name = "unicode-bold-dashed",
 	.horizon = unicode_bold_horizon_dashed_line,
 	.vertical = unicode_bold_vertical_dashed_line,
 	.ulcorner = unicode_bold_ulcorner,
@@ -114,7 +184,8 @@ struct ldraw_ops unicode_bold_dashed_line_ops = {
 	.lrcorner = unicode_bold_lrcorner,
 };
 
-struct ldraw_ops unicode_line_ops = {
+const struct ldraw_ops unicode_line_ops = {
+	.name = "unicode",
 	.horizon = unicode_horizon,
 	.vertical = unicode_vertical,
 	.ulcorner = unicode_ulcorner,
@@ -123,7 +194,8 @@ struct ldraw_ops unicode_line_ops = {
 	.lrcorner = unicode_lrcorner,
 };
 
-struct ldraw_ops unicode_line_dashed_line_ops = {
+const struct ldraw_ops unicode_dashed_line_ops = {
+	.name = "unicode-dashed",
 	.horizon = unicode_horizon_dashed_line,
 	.vertical = unicode_vertical_dashed_line,
 	.ulcorner = unicode_ulcorner,
@@ -131,3 +203,64 @@ struct ldraw_ops unicode_line_dashed_line_ops = {
 	.urcorner = unicode_urcorner,
 	.lrcorner = unicode_lrcorner,
 };
+
+const struct ldraw_ops utf8_line_ops = {
+	.name = "utf8",
+	.horizon = utf8_horizon,
+	.vertical = utf8_vertical,
+	.ulcorner = utf8_cross,
+	.llcorner = utf8_cross,
+	.urcorner = utf8_cross,
+	.lrcorner = utf8_cross,
+};
+
+const struct ldraw_ops *ldraw_operations[LINE_TYPE_MAX] = {
+	[LINE_TYPE_BOLD_UNICODE] = &unicode_bold_line_ops,
+	[LINE_TYPE_BOLD_UNICODE_DASHED] = &unicode_bold_dashed_line_ops,
+	[LINE_TYPE_BOLDBOLD_UNICODE] = &unicode_boldbold_line_ops,
+	[LINE_TYPE_THIN_UNICODE] = &unicode_line_ops,
+	[LINE_TYPE_THIN_UNICODE_DASHED] = &unicode_dashed_line_ops,
+	[LINE_TYPE_UTF8] = &utf8_line_ops,
+	[LINE_TYPE_HEART_UNICODE] = &unicode_heart_line_ops,
+};
+
+bool ldraw_hasname(const char *name)
+{
+	for (int i = LINE_TYPE_DEFAULT; i < LINE_TYPE_MAX; i++)
+		if (!strcmp(ldraw_operations[i]->name, name))
+			return true;
+	/**
+	 * print error to stderr, hint to stdout.
+	 */
+	fprintf(stderr, "ERROR: not support line type '%s', please use:\n",
+		name);
+	for (int i = LINE_TYPE_DEFAULT; i < LINE_TYPE_MAX; i++) {
+		fprintf(stdout, "\t%s\n", ldraw_operations[i]->name);
+	}
+	return false;
+}
+
+enum ltype_enum ldraw_name2type(const char *name)
+{
+	for (int i = LINE_TYPE_DEFAULT; i < LINE_TYPE_MAX; i++)
+		if (!strcmp(ldraw_operations[i]->name, name))
+			return i;
+	return LINE_TYPE_DEFAULT;
+}
+
+const struct ldraw_ops *ldraw_type2ops(enum ltype_enum t)
+{
+	if (t < LINE_TYPE_DEFAULT || t >= LINE_TYPE_MAX)
+		t = LINE_TYPE_DEFAULT;
+	return ldraw_operations[t];
+}
+
+const struct ldraw_ops *ldraw_name2ops(const char *name)
+{
+	return ldraw_type2ops(ldraw_name2type(name));
+}
+
+const char *ldraw_type2name(enum ltype_enum t)
+{
+	return ldraw_type2ops(t)->name;
+}
