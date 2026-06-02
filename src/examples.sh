@@ -14,10 +14,15 @@ sigint() {
 trap sigint INT
 
 # display all line type
-while sleep 0.05; do
-	seq 1 1 $(./plotcake -L nonsense 2>/dev/null | wc -l)
-done | ./plotcake ${args[@]} $(./plotcake -L nonsense 2>/dev/null | sed 's/^/-L/g') \
-	-C red -C red
+all_line_type() {
+	while sleep 0.05; do
+		seq 1 1 $(./plotcake -L nonsense 2>/dev/null | wc -l)
+	done | ./plotcake ${args[@]} $(./plotcake -L nonsense 2>/dev/null | sed 's/^/-L/g') \
+		-C red -C red ${@}
+}
+all_line_type
+all_line_type --logarithmic
+all_line_type --logarithmic10
 
 #
 for i in 2 4 1 4 6 1 9; do

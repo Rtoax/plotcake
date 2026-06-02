@@ -2,6 +2,7 @@
 /* Copyright (C) 2026 Rong Tao */
 #include <assert.h>
 #include <float.h>
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 #include "plot.h"
@@ -91,15 +92,38 @@ void __plot_warning(const struct plot *p, char *fmt, ...)
 	attroff(flavor[C_RED] | A_BOLD);
 }
 
+/**
+ * @max and @min is original value, if use logarithmic, must convert it youself.
+ */
 static void paint_line(struct plot *p, struct line *ln, double max, double min)
 {
 	int i = 0;
 	int prev_h = -1;
 	chtype color = flavor[ln->color];
 
+	switch (p->logarithmic) {
+	case T_LOGARITHMIC:
+		max = log(max);
+		min = log(min);
+		break;
+	case T_LOGARITHMIC10:
+		max = log10(max);
+		min = log10(min);
+		break;
+	case T_NONE:
+	default:
+		break;
+	}
+
 	for_each_value(ln, v)
 	{
 		double span = .0f, diff = .0f;
+		double plot_v = v->v;
+
+		if (p->logarithmic == T_LOGARITHMIC)
+			plot_v = log(plot_v);
+		else if (p->logarithmic == T_LOGARITHMIC10)
+			plot_v = log10(plot_v);
 
 		/**
 		 * The number of data points may be greater than the horizontal
@@ -122,7 +146,7 @@ static void paint_line(struct plot *p, struct line *ln, double max, double min)
 			diff = 0;
 			span = 1;
 		} else {
-			diff = v->v - min;
+			diff = plot_v - min;
 			span = max - min;
 		}
 
@@ -168,7 +192,15 @@ static void paint_line(struct plot *p, struct line *ln, double max, double min)
 		/* set y axis */
 		attron(color);
 		char sv[64];
-		int nc = snprintf(sv, 64, "%.3f", v->v);
+		int nc;
+
+		if (p->logarithmic == T_LOGARITHMIC)
+			nc = snprintf(sv, 64, "log(%.3f)=%.3f", v->v, plot_v);
+		else if (p->logarithmic == T_LOGARITHMIC10)
+			nc = snprintf(sv, 64, "log10(%.3f)=%.3f", v->v, plot_v);
+		else
+			nc = snprintf(sv, 64, "%.3f", v->v);
+
 		if (p->prev_max.left < nc)
 			p->prev_max.left = nc;
 		mvprintw(h, 0, "%s", sv);
@@ -190,7 +222,14 @@ static void paint_line(struct plot *p, struct line *ln, double max, double min)
 
 void plot_draw_title(const struct plot *p)
 {
-	mvaddstr(0, (p->width - strlen(p->title)) / 2, p->title);
+	char buf[128], *title = buf;
+	if (p->logarithmic == T_LOGARITHMIC)
+		snprintf(buf, 128, "%s (logarithmic)", p->title);
+	else if (p->logarithmic == T_LOGARITHMIC10)
+		snprintf(buf, 128, "%s (base-10 logarithmic)", p->title);
+	else
+		title = p->title;
+	mvaddstr(0, (p->width - strlen(title)) / 2, title);
 }
 
 void plot_draw_axes(const struct plot *p)
