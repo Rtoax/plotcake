@@ -42,6 +42,7 @@ const char argp_prog_doc[] =
 	"USAGE: [-T|--title=<TITLE>] [-v|--verbose]\n"
 	"\n"
 	"EXAMPLES:\n"
+	"\n"
 	"   $ ./plotcake        # Draw loadavg graph\n"
 	"   $ ./plotcake -M     # Draw memory usage graph\n"
 	"\n"
@@ -49,7 +50,12 @@ const char argp_prog_doc[] =
 	"   $ while sleep .5; do\n"
 	"	awk '{print $1}' /proc/sys/fs/file-nr\n"
 	"     done | ./plotcake --title 'Opened File Number' -l 'opened'\n"
-	"\n";
+	"\n"
+	"SHORTCUT KEY:\n"
+	"\n"
+	"   'q', Esc: quit\n"
+	"\n"
+	"OPTIONS:\n";
 
 static const struct argp_option opts[] = {
 	{ "title", 'T', "TITLE", 0, "Spedify title" },
@@ -73,7 +79,6 @@ static const struct argp_option opts[] = {
 };
 
 static int sig_rd_fd, sig_wr_fd;
-static char key = ' ';
 static int done = false;
 static int ram = false;
 static int verbose = false;
@@ -207,7 +212,9 @@ int main(int argc, char *argv[])
 	 * If stdin is redirected, open the terminal for key press.
 	 *
 	 * When we use stdin to pass data, we need to directly open the tty
-	 * device to read the keyboard.
+	 * device to read the keyboard. for example:
+	 *
+	 *   $ while sleep 1; echo 1; done | plotcake
 	 */
 	if (!isatty(STDIN_FILENO)) {
 		keyfd = open("/dev/tty", O_RDONLY);
@@ -266,6 +273,10 @@ int main(int argc, char *argv[])
 
 	curs_set(0);
 
+	/* make wgetch() return KEY_xxx, and non-blocking */
+	keypad(stdscr, TRUE);
+	nodelay(stdscr, TRUE);
+
 	init_flavor();
 
 	if (datafd == -1) {
@@ -294,7 +305,7 @@ int main(int argc, char *argv[])
 	plot_create_data(&plot);
 	plot_update_size(&plot, true);
 	plot_update_data(&plot);
-	redraw_screen(&plot);
+	plot_redraw(&plot);
 
 	/* main loop */
 	while (!done) {
@@ -303,10 +314,50 @@ int main(int argc, char *argv[])
 
 		int ret = select(maxfd + 1, &fds, NULL, NULL, NULL);
 		if (ret > 0 && FD_ISSET(keyfd, &fds)) {
-			int count = read(keyfd, &key, 1);
-			if (count == 1) {
-				switch (key) {
+			int count = 0;
+			/**
+			 * keyfd = open("/dev/tty")
+			 */
+			if (keyfd != STDIN_FILENO) {
+				int key = 0;
+				count = read(keyfd, &key, sizeof(key));
+				if (count > 0) {
+					/* convert to ncurses KEY */
+					switch (key) {
+					case 0x444f1b:
+						key = KEY_LEFT;
+						break;
+					case 0x434f1b:
+						key = KEY_RIGHT;
+						break;
+					case 0x424f1b:
+						key = KEY_DOWN;
+						break;
+					case 0x414f1b:
+						key = KEY_UP;
+						break;
+					default:
+						/* Handle more here */
+						break;
+					}
+					plot.keyboard.key = key;
+				} else {
+					plot.keyboard.key = ERR;
+				}
+			/**
+			 * keyfd = STDIN_FILENO
+			 */
+			} else {
+				/* need keypad() and nodelay() */
+				plot.keyboard.key = wgetch(stdscr);
+				count = 1;
+			}
+
+			if (plot.keyboard.key != ERR) {
+				plot.keyboard.count += count;
+				switch (plot.keyboard.key) {
 				case 'q':
+				case 27: /* Esc */
 					broadcast_sig(SIGINT);
 					goto end;
 					break;
@@ -354,7 +405,7 @@ int main(int argc, char *argv[])
 			continue;
 
 		if (redraw)
-			redraw_screen(&plot);
+			plot_redraw(&plot);
 	}
 
 end:

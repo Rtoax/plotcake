@@ -15,7 +15,10 @@ struct plot {
 	/**
 	 * max indicates the maximum value your terminal has reached during the
 	 * entire program run (you can use the mouse to drag and adjust the
-	 * terminal size)
+	 * terminal size).
+	 *
+	 * `heightmax` represents the maximum height of the terminal window, and
+	 * `widthmax` represents the maximum width of the terminal window.
 	 */
 	int heightmax, widthmax;
 	/* Current terminal size */
@@ -24,11 +27,19 @@ struct plot {
 	int plotheight, plotwidth;
 	struct {
 		int top, bottom, left, right;
-	} bnd, prev_max;
+	} bnd, bnd_prev_max;
 	struct lgroup *lghead, *lgtail;
 	int lgcount;
 	/* Logarithmic plotting */
 	enum { T_NONE = 0, T_LOGARITHMIC, T_LOGARITHMIC10 } logarithmic;
+
+	/**
+	 * record previous keyboard event.
+	 */
+	struct {
+		unsigned long count;
+		int key; /* read from STDIN/getch() or /dev/tty */
+	} keyboard;
 };
 
 #define for_each_lg(plt, iter)                                           \
@@ -47,6 +58,6 @@ void plot_draw_title(const struct plot *p);
 void paint_plot(struct plot *p);
 void plot_create_data(struct plot *p);
 void plot_update_data(struct plot *p);
-void redraw_screen(struct plot *p);
+void plot_redraw(struct plot *p);
 
 void init_flavor(void);

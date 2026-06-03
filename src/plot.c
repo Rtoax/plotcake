@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: (LGPL-2.1 OR BSD-2-Clause)
 /* Copyright (C) 2026 Rong Tao */
 #include <assert.h>
+#include <ctype.h>
 #include <float.h>
 #include <math.h>
 #include <stdio.h>
@@ -59,11 +60,12 @@ void plot_update_size(struct plot *p, bool init)
 		 * Just use left and right to make sure y axis values and line
 		 * names show correctly.
 		 */
-		p->bnd.left = p->bnd.left > p->prev_max.left ? p->bnd.left :
-							       p->prev_max.left;
-		p->bnd.right = p->bnd.right > p->prev_max.right ?
+		p->bnd.left = p->bnd.left > p->bnd_prev_max.left ?
+				      p->bnd.left :
+				      p->bnd_prev_max.left;
+		p->bnd.right = p->bnd.right > p->bnd_prev_max.right ?
 				       p->bnd.right :
-				       p->prev_max.right;
+				       p->bnd_prev_max.right;
 	}
 
 	getmaxyx(stdscr, p->height, p->width);
@@ -76,8 +78,10 @@ void plot_update_size(struct plot *p, bool init)
 	if (p->widthmax < p->width)
 		p->widthmax = p->width;
 
-	p->prev_max.left = BND_LEFT;
-	p->prev_max.right = BND_RIGHT;
+	p->bnd_prev_max.top = BND_TOP;
+	p->bnd_prev_max.bottom = BND_BOTTOM;
+	p->bnd_prev_max.left = BND_LEFT;
+	p->bnd_prev_max.right = BND_RIGHT;
 }
 
 void __plot_warning(const struct plot *p, char *fmt, ...)
@@ -201,15 +205,16 @@ static void paint_line(struct plot *p, struct line *ln, double max, double min)
 		else
 			nc = snprintf(sv, 64, "%.3f", v->v);
 
-		if (p->prev_max.left < nc)
-			p->prev_max.left = nc;
+		if (p->bnd_prev_max.left < nc)
+			p->bnd_prev_max.left = nc;
+
 		mvprintw(h, 0, "%s", sv);
 
 		if (i == ln->count) {
 			mvprintw(h, w + 1, "%s", ln->name);
 			nc = strlen(ln->name);
-			if (p->prev_max.right < nc)
-				p->prev_max.right = nc;
+			if (p->bnd_prev_max.right < nc)
+				p->bnd_prev_max.right = nc;
 #ifdef DEBUG
 			mvprintw(h + 1, w + 1, "%d", ln->count);
 			mvprintw(h + 2, w + 1, "%.1f", ln->min->v);
@@ -303,9 +308,12 @@ void paint_plot(struct plot *p)
 	mvaddstr(p->height - 1, p->width - strlen(verstring) - 1, verstring);
 
 #ifdef DEBUG
-	mvprintw(p->height - 2, 0, "plot: (%d,%d) max(%d,%d) plot(%d,%d)",
-		 p->height, p->width, p->heightmax, p->widthmax, p->plotheight,
-		 p->plotwidth);
+	mvprintw(
+		p->height - 2, 0,
+		"plot: (%d,%d) max(%d,%d) plot(%d,%d) keyboard(count=%ld,key=%d=0x%x='%s')",
+		p->height, p->width, p->heightmax, p->widthmax, p->plotheight,
+		p->plotwidth, p->keyboard.count, p->keyboard.key,
+		p->keyboard.key, keyname(p->keyboard.key));
 #endif
 
 	move(0, 0);
@@ -327,11 +335,14 @@ void plot_update_data(struct plot *p)
 	}
 }
 
-void redraw_screen(struct plot *p)
+void plot_redraw(struct plot *p)
 {
 	erase();
 	paint_plot(p);
 	refresh();
 
 	plot_update_size(p, false);
+
+	/* do some reset */
+	p->keyboard.key = 0;
 }
