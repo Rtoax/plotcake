@@ -122,7 +122,7 @@ bool hascolor_name(const char *name)
 	return color_name2n(name) != C_UNKNOWN;
 }
 
-int dequeue_val(struct line *l)
+static int dequeue_val(struct line *l)
 {
 	if (!l || !l->head)
 		return 0;
@@ -152,12 +152,13 @@ int dequeue_val(struct line *l)
 	return v;
 }
 
-int enqueue_val(struct line *l, double v)
+static int enqueue_val(struct line *l, double v)
 {
 	struct value *new = malloc(sizeof(struct value));
 	new->v = v;
 	new->logarithmic_v = log(v);
 	new->logarithmic10_v = log10(v);
+	new->exponential_v = exp(v);
 	gettimeofday(&new->tv, NULL);
 	new->next = NULL;
 
@@ -222,7 +223,7 @@ double line_range_min(struct line *l, int start, int len)
 	return min;
 }
 
-void line_add(struct line *l, double v)
+void line_add_val(struct line *l, double v)
 {
 	const struct plot *p = l->lg->plot;
 
@@ -230,7 +231,7 @@ void line_add(struct line *l, double v)
 
 	/**
 	 * Due to the limited width of the screen, we removed unnecessary
-	 * history records and keep the old values as mach as possible.
+	 * history records and keep the old values as much as possible.
 	 */
 	for (int i = p->widthmax - 2; i < l->count; i++)
 		dequeue_val(l);

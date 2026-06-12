@@ -29,15 +29,25 @@ struct plot {
 		int top, bottom, left, right;
 	} bnd, bnd_prev_max;
 	struct lgroup *lghead, *lgtail;
+
 	int lgcount;
-	/* Logarithmic plotting */
-	enum { T_NONE = 0, T_LOGARITHMIC, T_LOGARITHMIC10 } logarithmic;
+	unsigned long redrawcount;
+
+	/* Scaling plotting */
+	enum {
+		T_NONE = 0,
+		T_LOGARITHMIC,
+		T_LOGARITHMIC10,
+		T_EXPONENTIAL,
+	} v_scaling;
 
 	/**
 	 * record previous keyboard event.
 	 */
 	struct {
 		unsigned long count;
+		unsigned long key_left_count, key_right_count;
+		unsigned long key_h_count, key_l_count, key_enter_count;
 		int key; /* read from STDIN/getch() or /dev/tty */
 	} keyboard;
 };
@@ -45,6 +55,8 @@ struct plot {
 #define for_each_lg(plt, iter)                                           \
 	for (struct lgroup *iter = ((struct plot *)(plt))->lghead; iter; \
 	     iter = iter->next)
+
+void plot_init(struct plot *p);
 
 #define plot_warning(p, fmt...) __plot_warning(p, fmt)
 void __plot_warning(const struct plot *p, char *fmt, ...);
@@ -55,9 +67,8 @@ void plot_update_size(struct plot *p, bool init);
 void plot_draw_axes(const struct plot *p);
 void plot_draw_title(const struct plot *p);
 
-void paint_plot(struct plot *p);
 void plot_create_data(struct plot *p);
 void plot_update_data(struct plot *p);
-void plot_redraw(struct plot *p);
+void plot_redraw(struct plot *p, bool debug);
 
 void init_flavor(void);

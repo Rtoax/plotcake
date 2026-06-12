@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "plot.h"
+#include "keyboard.h"
 
 chtype flavor[C_MAX] = { 0 };
 static const char *verstring = "github.com/rtoax/test-linux " MY_VERSION;
@@ -20,8 +21,8 @@ int plot_add(struct plot *p, struct lgroup *lg, void *lg_ops_arg)
 		p->lgcount = 1;
 	} else {
 		p->lgtail->next = lg;
+		p->lgcount++;
 	}
-	p->lgcount++;
 	p->lgtail = lg;
 	lg->plot = p;
 	lg->ops->arg = lg_ops_arg;
@@ -99,13 +100,14 @@ void __plot_warning(const struct plot *p, char *fmt, ...)
 /**
  * @max and @min is original value, if use logarithmic, must convert it youself.
  */
-static void paint_line(struct plot *p, struct line *ln, double max, double min)
+static void paint_line(struct plot *p, struct line *ln, double max, double min,
+		       bool debug)
 {
 	int i = 0;
 	int prev_h = -1;
 	chtype color = flavor[ln->color];
 
-	switch (p->logarithmic) {
+	switch (p->v_scaling) {
 	case T_LOGARITHMIC:
 		max = log(max);
 		min = log(min);
@@ -113,6 +115,10 @@ static void paint_line(struct plot *p, struct line *ln, double max, double min)
 	case T_LOGARITHMIC10:
 		max = log10(max);
 		min = log10(min);
+		break;
+	case T_EXPONENTIAL:
+		max = exp(max);
+		min = exp(min);
 		break;
 	case T_NONE:
 	default:
@@ -124,10 +130,12 @@ static void paint_line(struct plot *p, struct line *ln, double max, double min)
 		double span = .0f, diff = .0f;
 		double plot_v = v->v;
 
-		if (p->logarithmic == T_LOGARITHMIC)
-			plot_v = log(plot_v);
-		else if (p->logarithmic == T_LOGARITHMIC10)
-			plot_v = log10(plot_v);
+		if (p->v_scaling == T_LOGARITHMIC)
+			plot_v = v->logarithmic_v;
+		else if (p->v_scaling == T_LOGARITHMIC10)
+			plot_v = v->logarithmic10_v;
+		else if (p->v_scaling == T_EXPONENTIAL)
+			plot_v = v->exponential_v;
 
 		/**
 		 * The number of data points may be greater than the horizontal
@@ -198,10 +206,12 @@ static void paint_line(struct plot *p, struct line *ln, double max, double min)
 		char sv[64];
 		int nc;
 
-		if (p->logarithmic == T_LOGARITHMIC)
+		if (p->v_scaling == T_LOGARITHMIC)
 			nc = snprintf(sv, 64, "log(%.3f)=%.3f", v->v, plot_v);
-		else if (p->logarithmic == T_LOGARITHMIC10)
+		else if (p->v_scaling == T_LOGARITHMIC10)
 			nc = snprintf(sv, 64, "log10(%.3f)=%.3f", v->v, plot_v);
+		else if (p->v_scaling == T_EXPONENTIAL)
+			nc = snprintf(sv, 64, "exp(%.3f)=%.3f", v->v, plot_v);
 		else
 			nc = snprintf(sv, 64, "%.3f", v->v);
 
@@ -215,11 +225,12 @@ static void paint_line(struct plot *p, struct line *ln, double max, double min)
 			nc = strlen(ln->name);
 			if (p->bnd_prev_max.right < nc)
 				p->bnd_prev_max.right = nc;
-#ifdef DEBUG
-			mvprintw(h + 1, w + 1, "%d", ln->count);
-			mvprintw(h + 2, w + 1, "%.1f", ln->min->v);
-			mvprintw(h + 3, w + 1, "%.1f", ln->max->v);
-#endif
+
+			if (debug) {
+				mvprintw(h + 1, w + 1, "%d", ln->count);
+				mvprintw(h + 2, w + 1, "%.1f", ln->min->v);
+				mvprintw(h + 3, w + 1, "%.1f", ln->max->v);
+			}
 		}
 		attroff(color);
 	}
@@ -228,10 +239,12 @@ static void paint_line(struct plot *p, struct line *ln, double max, double min)
 void plot_draw_title(const struct plot *p)
 {
 	char buf[128], *title = buf;
-	if (p->logarithmic == T_LOGARITHMIC)
+	if (p->v_scaling == T_LOGARITHMIC)
 		snprintf(buf, 128, "%s (logarithmic)", p->title);
-	else if (p->logarithmic == T_LOGARITHMIC10)
+	else if (p->v_scaling == T_LOGARITHMIC10)
 		snprintf(buf, 128, "%s (base-10 logarithmic)", p->title);
+	else if (p->v_scaling == T_EXPONENTIAL)
+		snprintf(buf, 128, "%s (base-e exponential)", p->title);
 	else
 		title = p->title;
 	mvaddstr(0, (p->width - strlen(title)) / 2, title);
@@ -254,7 +267,7 @@ void plot_draw_axes(const struct plot *p)
 			 p->plotwidth + p->bnd.left, p->label_x);
 }
 
-static void __paint_plot_lg(struct plot *p, const struct lgroup *lg)
+static void __paint_plot_lg(struct plot *p, const struct lgroup *lg, bool debug)
 {
 	double max = -DBL_MAX, min = DBL_MAX;
 
@@ -277,25 +290,24 @@ static void __paint_plot_lg(struct plot *p, const struct lgroup *lg)
 	{
 		if (l->count <= 0)
 			continue;
-		paint_line(p, l, max, min);
+		paint_line(p, l, max, min, debug);
 	}
-#ifdef DEBUG
-	if (lg->ops->plot_debug)
+
+	if (debug && lg->ops->plot_debug)
 		lg->ops->plot_debug(lg, lg->ops->arg);
-#endif
 }
 
 /**
  * need erase() before, refresh() after
  */
-void paint_plot(struct plot *p)
+static void paint_plot(struct plot *p, bool debug)
 {
 	plot_draw_title(p);
 	plot_draw_axes(p);
 
 	for_each_lg(p, lg)
 	{
-		__paint_plot_lg(p, lg);
+		__paint_plot_lg(p, lg, debug);
 	}
 
 	time_t sec = time(NULL);
@@ -307,14 +319,21 @@ void paint_plot(struct plot *p)
 
 	mvaddstr(p->height - 1, p->width - strlen(verstring) - 1, verstring);
 
-#ifdef DEBUG
-	mvprintw(
-		p->height - 2, 0,
-		"plot: (%d,%d) max(%d,%d) plot(%d,%d) keyboard(count=%ld,key=%d=0x%x='%s')",
-		p->height, p->width, p->heightmax, p->widthmax, p->plotheight,
-		p->plotwidth, p->keyboard.count, p->keyboard.key,
-		p->keyboard.key, keyname(p->keyboard.key));
-#endif
+	if (debug) {
+		mvprintw(
+			p->height - 2, 0,
+			"plot: size(%d,%d) max(%d,%d) plot(%d,%d) keyboard(count=%ld,key=%d=0x%x='%s')",
+			p->height, p->width, p->heightmax, p->widthmax,
+			p->plotheight, p->plotwidth, p->keyboard.count,
+			p->keyboard.key, p->keyboard.key,
+			keyname(p->keyboard.key));
+		mvprintw(
+			p->height - 1, 0,
+			"      redraw=%ld, key(left=%ld,right=%ld,l=%ld,h=%ld,enter=%ld)",
+			p->redrawcount, p->keyboard.key_left_count,
+			p->keyboard.key_right_count, p->keyboard.key_l_count,
+			p->keyboard.key_h_count, p->keyboard.key_enter_count);
+	}
 
 	move(0, 0);
 }
@@ -335,14 +354,80 @@ void plot_update_data(struct plot *p)
 	}
 }
 
-void plot_redraw(struct plot *p)
+void plot_redraw(struct plot *p, bool debug)
 {
+	p->redrawcount++;
+
 	erase();
-	paint_plot(p);
+
+	paint_plot(p, debug);
+
+	exec_key_handler(p->keyboard.key);
+
 	refresh();
 
 	plot_update_size(p, false);
 
 	/* do some reset */
 	p->keyboard.key = 0;
+}
+
+/**
+ * Press key 'h', display the help info
+ */
+static void key_h(int key, void *arg)
+{
+	struct plot *p = arg;
+
+	int h = p->plotheight + p->bnd.top - 1;
+	int w = p->bnd.left + 1;
+
+	attron(flavor[C_BLUE] | A_BOLD);
+	mvprintw(h - 3, w, "'q' and Esc: quit");
+	mvprintw(h - 2, w, "'h': show the help info");
+	mvprintw(h - 1, w, "'l': display the label for each line");
+	mvprintw(h, w, "Enter: refresh plot");
+	attroff(flavor[C_BLUE] | A_BOLD);
+}
+
+/**
+ * Press key 'l', display the label for each line.
+ */
+static void key_l(int key, void *arg)
+{
+	struct plot *p = arg;
+	int i, nline = 0;
+
+	for_each_lg(p, lg)
+	{
+		nline += lg->count;
+	}
+
+	int h = p->plotheight + p->bnd.top - 1;
+	int w = p->bnd.left + 1;
+
+	i = 0;
+	for_each_lg(p, lg)
+	{
+		for_each_line(lg, ln)
+		{
+			int hi = h - nline + i + 1;
+			const int n = 6;
+
+			attron(flavor[ln->color] | A_BOLD);
+			for (int x = 0; x < n; x++)
+				ln->ops->horizon(ln, hi, w + x);
+			mvprintw(hi, w + n + 1, " %s", ln->name);
+			attroff(flavor[ln->color] | A_BOLD);
+			i++;
+		}
+	}
+}
+
+void plot_init(struct plot *p)
+{
+	memset(p, 0, sizeof(struct plot));
+
+	register_key_handler('h', p, key_h);
+	register_key_handler('l', p, key_l);
 }

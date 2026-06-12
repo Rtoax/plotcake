@@ -27,7 +27,9 @@
 #include <time.h>
 #include <ncurses.h>
 #include <unistd.h>
+#include "file.h"
 #include "load.h"
+#include "keyboard.h"
 #include "value.h"
 #include "plot.h"
 #include "ram.h"
@@ -36,6 +38,7 @@
 enum {
 	ARG_LOGARITHMIC = 200,
 	ARG_LOGARITHMIC10,
+	ARG_EXPONENTIAL,
 };
 
 const char argp_prog_doc[] =
@@ -53,7 +56,10 @@ const char argp_prog_doc[] =
 	"\n"
 	"SHORTCUT KEY:\n"
 	"\n"
-	"   'q', Esc: quit\n"
+	"   'q' and Esc: quit\n"
+	"   'h': show the help info\n"
+	"   'l': display the label for each line (long press to prevent flickering)\n"
+	"   Enter: refresh plot\n"
 	"\n"
 	"OPTIONS:\n";
 
@@ -72,6 +78,7 @@ static const struct argp_option opts[] = {
 	{ "logarithmic", ARG_LOGARITHMIC, NULL, 1, "Use natural logarithmic" },
 	{ "logarithmic10", ARG_LOGARITHMIC10, NULL, 1,
 	  "Use base-10 logarithmic, the curve shape is exactly the same as --logarithmic, only the values of the tick labels on the axes are different." },
+	{ "exponential", ARG_EXPONENTIAL, NULL, 1, "Use base-e exponential" },
 	{ "tmout", 't', "TIMEOUT SEC", 0, "Spedify timeout seconds" },
 	{ "verbose", 'v', NULL, 1, "Display detail" },
 	{ "version", 'V', NULL, 1, "Display version" },
@@ -87,10 +94,7 @@ static int interval_sec = 1;
 
 static char data_from_stdin[256] = { 0 };
 
-struct plot plot = {
-	.title = NULL,
-	.logarithmic = T_NONE,
-};
+struct plot plot = { 0 };
 
 void sig_handler(int signo)
 {
@@ -143,10 +147,13 @@ static error_t parse_arg(int opt, char *arg, struct argp_state *state)
 		}
 		break;
 	case ARG_LOGARITHMIC:
-		plot.logarithmic = T_LOGARITHMIC;
+		plot.v_scaling = T_LOGARITHMIC;
+		break;
+	case ARG_EXPONENTIAL:
+		plot.v_scaling = T_EXPONENTIAL;
 		break;
 	case ARG_LOGARITHMIC10:
-		plot.logarithmic = T_LOGARITHMIC10;
+		plot.v_scaling = T_LOGARITHMIC10;
 		break;
 	case 'I':
 		interval_sec = atoi(arg);
@@ -187,6 +194,9 @@ int main(int argc, char *argv[])
 	int timerfd, keyfd, datafd, tmoutfd;
 	int sigpipe[2];
 	fd_set readfds;
+
+	plot_init(&plot);
+	keyboard_init();
 
 	int err = argp_parse(&argp, argc, argv, 0, NULL, NULL);
 	if (err) {
@@ -266,6 +276,20 @@ int main(int argc, char *argv[])
 
 	/* curses start from here */
 
+	/**
+	 * In ncurses, the biggest difficulty in detecting a single press of the
+	 * Esc key directly is that the Esc key, besides being a key itself, is
+	 * also the starting byte of all escape sequences (such as arrow keys).
+	 *
+	 * To avoid confusion, ncurses, upon detecting the Esc key, briefly
+	 * waits to see if there are any subsequent characters. This process
+	 * (usually about 1 second) causes a sense of 'delay'.
+	 *
+	 * Another method is to set the environment variable with the same name,
+	 * ESCDELAY=50.
+	 */
+	set_escdelay(50);
+
 	initscr();
 	cbreak();
 	noecho();
@@ -305,7 +329,7 @@ int main(int argc, char *argv[])
 	plot_create_data(&plot);
 	plot_update_size(&plot, true);
 	plot_update_data(&plot);
-	plot_redraw(&plot);
+	plot_redraw(&plot, verbose);
 
 	/* main loop */
 	while (!done) {
@@ -356,12 +380,27 @@ int main(int argc, char *argv[])
 			if (plot.keyboard.key != ERR) {
 				plot.keyboard.count += count;
 				switch (plot.keyboard.key) {
+				case KEY_LEFT:
+					plot.keyboard.key_left_count++;
+					break;
+				case KEY_RIGHT:
+					plot.keyboard.key_right_count++;
+					break;
 				case 'q':
 				case 27: /* Esc */
 					broadcast_sig(SIGINT);
 					goto end;
 					break;
+				case 'h':
+					plot.keyboard.key_h_count++;
+					redraw = true;
+					break;
+				case 'l':
+					plot.keyboard.key_l_count++;
+					redraw = true;
+					break;
 				case 13: /* enter */
+					plot.keyboard.key_enter_count++;
 					redraw = true;
 					break;
 				}
@@ -405,7 +444,7 @@ int main(int argc, char *argv[])
 			continue;
 
 		if (redraw)
-			plot_redraw(&plot);
+			plot_redraw(&plot, verbose);
 	}
 
 end:
@@ -420,5 +459,7 @@ end:
 	close(sig_rd_fd);
 	close(sig_wr_fd);
 	endwin();
+
+	save_plot(&plot);
 	return 0;
 }
