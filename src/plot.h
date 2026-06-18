@@ -8,6 +8,17 @@
 #include "config.h"
 #include "value.h"
 
+/**
+ * Scaling plotting values, different from @plotscaling.
+ */
+enum numerical_scaling {
+	NS_NONE = 0,
+	NS_LOGARITHMIC,
+	NS_LOGARITHMIC10,
+	NS_EXPONENTIAL,
+	NS_MAX,
+};
+
 struct plot {
 	char *title;
 	char *label_x;
@@ -23,8 +34,17 @@ struct plot {
 	int heightmax, widthmax;
 	/* Current terminal size */
 	int height, width;
-	/* The size of the drawing area (excluding boundaries, axes, etc.) */
+	/**
+	 * The size of the drawing area, excluding boundaries, axes, line
+	 * labels.
+	 */
 	int plotheight, plotwidth;
+	/**
+	 * The scaling factor for the drawing. The default value is 1, which
+	 * means no scaling. It only supports zoomed-out display, similar to
+	 * viewing "Global Routes" in map software.
+	 */
+	int plotscaling;
 	struct {
 		int top, bottom, left, right;
 	} bnd, bnd_prev_max;
@@ -33,30 +53,54 @@ struct plot {
 	int lgcount;
 	unsigned long redrawcount;
 
-	/* Scaling plotting */
-	enum {
-		T_NONE = 0,
-		T_LOGARITHMIC,
-		T_LOGARITHMIC10,
-		T_EXPONENTIAL,
-	} v_scaling;
+	enum numerical_scaling v_scaling;
 
 	/**
 	 * record previous keyboard event.
 	 */
 	struct {
-		unsigned long count;
-		unsigned long key_left_count, key_right_count;
-		unsigned long key_h_count, key_l_count, key_enter_count;
-		int key; /* read from STDIN/getch() or /dev/tty */
+		struct {
+			unsigned long total;
+			unsigned long left, right, up, down;
+			unsigned long enter;
+			unsigned long h, l, r, t, v;
+		} cnt;
+		int current_key; /* read from STDIN/getch() or /dev/tty */
 	} keyboard;
+
+	/**
+	 * When something happens internally, such as a change in the drawing
+	 * boundary, we need to redraw, rather than letting external conditions
+	 * trigger a redraw.
+	 */
+	bool need_redraw;
 };
 
 #define for_each_lg(plt, iter)                                           \
 	for (struct lgroup *iter = ((struct plot *)(plt))->lghead; iter; \
 	     iter = iter->next)
 
+#define plot_scaling_init(p)                          \
+	do {                                          \
+		struct plot *___p = (struct plot *)p; \
+		___p->plotscaling = 1;                \
+	} while (0)
+
+#define plot_scaling_up(p)                            \
+	do {                                          \
+		struct plot *___p = (struct plot *)p; \
+		___p->plotscaling++;                  \
+	} while (0)
+#define plot_scaling_down(p)                          \
+	do {                                          \
+		struct plot *___p = (struct plot *)p; \
+		if (___p->plotscaling > 1) {          \
+			___p->plotscaling--;          \
+		}                                     \
+	} while (0)
+
 void plot_init(struct plot *p);
+unsigned long plot_mem_size(const struct plot *p);
 
 #define plot_warning(p, fmt...) __plot_warning(p, fmt)
 void __plot_warning(const struct plot *p, char *fmt, ...);

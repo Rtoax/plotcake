@@ -13,7 +13,7 @@
 
 static int save_txt(const struct plot *p)
 {
-	int lg_idx, ln_idx;
+	int lg_idx;
 	char *path = FILE_DATA;
 	FILE *fp = fopen(path, "w");
 	if (!fp) {
@@ -25,7 +25,7 @@ static int save_txt(const struct plot *p)
 	fprintf(fp, "plot %d \"%s\" \"%s\" \"%s\"\n", p->lgcount, p->title,
 		p->label_x, p->label_y);
 
-	lg_idx = ln_idx = 0;
+	lg_idx = 0;
 	for_each_lg(p, lg)
 	{
 		fprintf(fp, "#      idx nline\n");
@@ -34,17 +34,15 @@ static int save_txt(const struct plot *p)
 		for_each_line(lg, ln)
 		{
 			fprintf(fp, "#    lgidx lnidx nvals\n");
-			fprintf(fp, "line %d %d %d\n", lg_idx, ln_idx,
+			fprintf(fp, "line %d %d %ld\n", lg_idx, ln->id,
 				ln->count);
 
 			fprintf(fp, "#     lnidx value sec usec\n");
 			for_each_value(ln, v)
 			{
-				fprintf(fp, "value %d %lf %ld %ld\n", ln_idx,
+				fprintf(fp, "value %d %lf %ld %ld\n", ln->id,
 					v->v, v->tv.tv_sec, v->tv.tv_usec);
 			}
-
-			ln_idx++;
 		}
 
 		lg_idx++;
@@ -129,9 +127,20 @@ static int save_json(const struct plot *p)
 	json_object_put(root);
 	return 0;
 }
-#else
-#define save_json(p) 0
 #endif
+
+static struct plot_file_operations pf_ops[] = {
+	{
+		.name = "txt",
+		.save = &save_txt,
+	},
+#ifdef HAVE_JSON_C
+	{
+		.name = "json",
+		.save = &save_json,
+	},
+#endif
+};
 
 /**
  * only have one plot
@@ -139,7 +148,11 @@ static int save_json(const struct plot *p)
 int save_plot(const struct plot *p)
 {
 	int err = 0;
-	err = err ?: save_txt(p);
-	err = err ?: save_json(p);
+	for (int i = 0; i < sizeof(pf_ops) / sizeof(pf_ops[0]); i++) {
+		if (!pf_ops[i].save)
+			continue;
+		fprintf(stderr, "Save to %s\n", pf_ops[i].name);
+		err = err ?: pf_ops[i].save(p);
+	}
 	return err;
 }

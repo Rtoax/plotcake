@@ -16,13 +16,13 @@ static void loadavg_create(struct lgroup *lg, void *arg)
 static void loadavg_update(struct lgroup *lg, void *arg)
 {
 	double avg[3];
+	int i = 0;
 
 	getloadavg(avg, 3);
 
-	int i = 0;
 	for_each_line(lg, line)
 	{
-		line_add_val(line, avg[i]);
+		line_add_value(line, avg[i], -1);
 		i++;
 	}
 }
@@ -33,8 +33,8 @@ static void loadavg_plot_debug(const struct lgroup *lg, void *arg)
 	int i = 0;
 	for_each_line(lg, ln)
 	{
-		mvprintw(i + 1, p->bnd.left + 1, "%s: cnt=%d %lf~%lf", ln->name,
-			 ln->count, ln->min->v, ln->max->v);
+		mvprintw(i + 1, p->bnd.left + 1, "%s: cnt=%ld %lf~%lf",
+			 ln->name, ln->count, ln->min->v, ln->max->v);
 		i++;
 	}
 }

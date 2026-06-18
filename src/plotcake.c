@@ -41,27 +41,36 @@ enum {
 	ARG_EXPONENTIAL,
 };
 
-const char argp_prog_doc[] =
-	"USAGE: [-T|--title=<TITLE>] [-v|--verbose]\n"
+const char argp_prog_doc[] = ANSI_BOLD
+	"USAGE: " ANSI_RST "[-T|--title=<TITLE>] [-v|--verbose]\n"
+	"\n" ANSI_BOLD "EXAMPLES:\n" ANSI_RST "\n" ANSI_GREEN
+	"   $ plotcake        " ANSI_RST ANSI_GRAY
+	"# Draw loadavg graph\n" ANSI_RST ANSI_GREEN
+	"   $ plotcake -M     " ANSI_RST ANSI_GRAY
+	"# Draw memory usage graph\n" ANSI_RST "\n"
+	"   If data is retrieved from stdin, then \\n will be used as the delimiter\n"
+	"   by default, for example:\n"
 	"\n"
-	"EXAMPLES:\n"
-	"\n"
-	"   $ ./plotcake        # Draw loadavg graph\n"
-	"   $ ./plotcake -M     # Draw memory usage graph\n"
-	"\n"
-	"   # Draw opened file number\n"
+	"   " ANSI_GRAY "# Draw opened file number\n" ANSI_RST ANSI_GREEN
 	"   $ while sleep .5; do\n"
 	"	awk '{print $1}' /proc/sys/fs/file-nr\n"
-	"     done | ./plotcake --title 'Opened File Number' -l 'opened'\n"
+	"     done | plotcake --title 'Opened File Number' -l 'opened'\n" ANSI_RST
 	"\n"
-	"SHORTCUT KEY:\n"
-	"\n"
-	"   'q' and Esc: quit\n"
-	"   'h': show the help info\n"
-	"   'l': display the label for each line (long press to prevent flickering)\n"
-	"   Enter: refresh plot\n"
-	"\n"
-	"OPTIONS:\n";
+	"   " ANSI_GRAY "# Draw one line\n" ANSI_RST ANSI_GREEN
+	"   $ seq 1 1 10 | plotcake\n" ANSI_RST "   " ANSI_GRAY
+	"# Draw ten line\n" ANSI_RST ANSI_GREEN
+	"   $ seq -s=' ' 1 1 10 | plotcake\n" ANSI_RST "\n" ANSI_BOLD
+	"SHORTCUT KEY:\n" ANSI_RST "\n"
+	"   " KEY_HELP_h "\n"
+	"   " KEY_HELP_l "\n"
+	"   " KEY_HELP_q "\n"
+	"   " KEY_HELP_r "\n"
+	"   " KEY_HELP_t "\n"
+	"   " KEY_HELP_v "\n"
+	"   " KEY_HELP_ENTER "\n"
+	"   " KEY_HELP_UP "\n"
+	"   " KEY_HELP_DOWN "\n"
+	"\n" ANSI_BOLD "OPTIONS:" ANSI_RST;
 
 static const struct argp_option opts[] = {
 	{ "title", 'T', "TITLE", 0, "Spedify title" },
@@ -70,17 +79,25 @@ static const struct argp_option opts[] = {
 	{ "llabel", 'l', "LINE NAME", 0,
 	  "Spedify line label (may be listed multiple times)" },
 	{ "ltype", 'L', "LINE TYPE", 0,
-	  "Spedify line types, if an invalid value is entered, the supported line types will be listed (may be listed multiple times)" },
+	  "Spedify line types, if an invalid value is entered, the supported "
+	  "line types will be listed (may be listed multiple times)" },
 	{ "lcolor", 'C', "LINE COLOR", 0,
-	  "Spedify line colors, if an invalid value is entered, the supported line colors will be listed, can match color prefixes, such as 'r' matching 'red' (may be listed multiple times)" },
+	  "Spedify line colors, if an invalid value is entered, the supported "
+	  "line colors will be listed, can match color prefixes, such as 'r' "
+	  "matching 'red' (may be listed multiple times)" },
 	{ "ram", 'M', NULL, 1, "Display memory instead of loadavg" },
 	{ "interval", 'I', "INTERVAL SEC", 0, "Spedify interval seconds" },
-	{ "logarithmic", ARG_LOGARITHMIC, NULL, 1, "Use natural logarithmic" },
+	{ "logarithmic", ARG_LOGARITHMIC, NULL, 1,
+	  "Use natural logarithmic (shortcut " KEY_HELP_t ")" },
 	{ "logarithmic10", ARG_LOGARITHMIC10, NULL, 1,
-	  "Use base-10 logarithmic, the curve shape is exactly the same as --logarithmic, only the values of the tick labels on the axes are different." },
-	{ "exponential", ARG_EXPONENTIAL, NULL, 1, "Use base-e exponential" },
+	  "Use base-10 logarithmic, the curve shape is exactly the same as "
+	  "--logarithmic, only the values of the tick labels on the axes are "
+	  "different (shortcut " KEY_HELP_t ")" },
+	{ "exponential", ARG_EXPONENTIAL, NULL, 1,
+	  "Use base-e exponential (shortcut " KEY_HELP_t ")" },
 	{ "tmout", 't', "TIMEOUT SEC", 0, "Spedify timeout seconds" },
-	{ "verbose", 'v', NULL, 1, "Display detail" },
+	{ "verbose", 'v', NULL, 1,
+	  "Display detail (shortcut: " KEY_HELP_v ")" },
 	{ "version", 'V', NULL, 1, "Display version" },
 	{},
 };
@@ -147,13 +164,13 @@ static error_t parse_arg(int opt, char *arg, struct argp_state *state)
 		}
 		break;
 	case ARG_LOGARITHMIC:
-		plot.v_scaling = T_LOGARITHMIC;
+		plot.v_scaling = NS_LOGARITHMIC;
 		break;
 	case ARG_EXPONENTIAL:
-		plot.v_scaling = T_EXPONENTIAL;
+		plot.v_scaling = NS_EXPONENTIAL;
 		break;
 	case ARG_LOGARITHMIC10:
-		plot.v_scaling = T_LOGARITHMIC10;
+		plot.v_scaling = NS_LOGARITHMIC10;
 		break;
 	case 'I':
 		interval_sec = atoi(arg);
@@ -349,58 +366,89 @@ int main(int argc, char *argv[])
 					/* convert to ncurses KEY */
 					switch (key) {
 					case 0x444f1b:
+					case 0x445b1b:
 						key = KEY_LEFT;
 						break;
 					case 0x434f1b:
+					case 0x435b1b:
 						key = KEY_RIGHT;
 						break;
 					case 0x424f1b:
+					case 0x425b1b:
 						key = KEY_DOWN;
 						break;
 					case 0x414f1b:
+					case 0x415b1b:
 						key = KEY_UP;
 						break;
 					default:
 						/* Handle more here */
 						break;
 					}
-					plot.keyboard.key = key;
+					plot.keyboard.current_key = key;
 				} else {
-					plot.keyboard.key = ERR;
+					plot.keyboard.current_key = ERR;
 				}
 			/**
 			 * keyfd = STDIN_FILENO
 			 */
 			} else {
 				/* need keypad() and nodelay() */
-				plot.keyboard.key = wgetch(stdscr);
+				plot.keyboard.current_key = wgetch(stdscr);
 				count = 1;
 			}
 
-			if (plot.keyboard.key != ERR) {
-				plot.keyboard.count += count;
-				switch (plot.keyboard.key) {
+			if (plot.keyboard.current_key != ERR) {
+				plot.keyboard.cnt.total += count;
+				switch (plot.keyboard.current_key) {
 				case KEY_LEFT:
-					plot.keyboard.key_left_count++;
+					plot.keyboard.cnt.left++;
+					redraw = true;
 					break;
 				case KEY_RIGHT:
-					plot.keyboard.key_right_count++;
+					plot.keyboard.cnt.right++;
+					redraw = true;
 					break;
-				case 'q':
+				case KEY_UP:
+					plot.keyboard.cnt.up++;
+					plot_scaling_up(&plot);
+					redraw = true;
+					break;
+				case KEY_DOWN:
+					plot.keyboard.cnt.down++;
+					plot_scaling_down(&plot);
+					redraw = true;
+					break;
+				case 'q': /* quit */
 				case 27: /* Esc */
 					broadcast_sig(SIGINT);
 					goto end;
 					break;
-				case 'h':
-					plot.keyboard.key_h_count++;
+				case 'v': /* verbose mode switch */
+					plot.keyboard.cnt.v++;
+					redraw = true;
+					verbose = !verbose;
+					break;
+				case 'r': /* reset plot */
+					plot.keyboard.cnt.r++;
 					redraw = true;
 					break;
-				case 'l':
-					plot.keyboard.key_l_count++;
+				case 't': /* select numerical scaling type */
+					plot.keyboard.cnt.t++;
+					redraw = true;
+					plot.v_scaling =
+						(plot.v_scaling + 1) % NS_MAX;
+					break;
+				case 'h': /* help */
+					plot.keyboard.cnt.h++;
+					redraw = true;
+					break;
+				case 'l': /* list line labels */
+					plot.keyboard.cnt.l++;
 					redraw = true;
 					break;
 				case 13: /* enter */
-					plot.keyboard.key_enter_count++;
+					plot.keyboard.cnt.enter++;
 					redraw = true;
 					break;
 				}
@@ -436,7 +484,6 @@ int main(int argc, char *argv[])
 			ssize_t cnt = read(datafd, data_from_stdin,
 					   sizeof(data_from_stdin));
 			if (cnt > 0) {
-				/* TODO: parse data and plot */
 				redraw = true;
 			}
 			plot_update_data(&plot);

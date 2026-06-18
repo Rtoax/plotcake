@@ -4,6 +4,7 @@
 #include <unistd.h>
 #include <malloc.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/sysinfo.h>
 #include "plot.h"
 #include "stdin.h"
@@ -41,12 +42,10 @@ static void stdin_create(struct lgroup *lg, void *arg)
 		__add_line(lg, i);
 }
 
-static void stdin_update(struct lgroup *lg, void *arg)
+static void __stdin_add_data(struct lgroup *lg, struct stdin_arg *a, char *buf)
 {
 	int i, narg;
-	struct stdin_arg *a = arg;
 	double *values = malloc(sizeof(double) * a->nline);
-	char *buf = a->line_buff;
 
 	if (*buf == '\0')
 		return;
@@ -80,13 +79,45 @@ static void stdin_update(struct lgroup *lg, void *arg)
 		 * above it.
 		 */
 		if (i < narg) {
-			line_add_val(line, values[i]);
+			line_add_value(line, values[i], -1);
 		} else {
-			line_add_val(line, line->tail->v);
+			line_add_value(line, line->tail->v, -1);
 		}
 		i++;
 	}
 	free(values);
+}
+
+static void __stdin_update(struct lgroup *lg, struct stdin_arg *a)
+{
+	char *buf = strdup(a->line_buff);
+
+	if (!buf)
+		return;
+
+	char *s = buf;
+
+	/**
+	 * The buf could be "0.49 0.64 0.68\n0.49 0.64 0.68\n", split it by '\n'
+	 * first.
+	 */
+	while (s && *s != '\0') {
+		char *ln_end = strchr(s, '\n');
+		if (ln_end) {
+			*ln_end = '\0';
+			__stdin_add_data(lg, a, s);
+			s = ln_end + 1;
+		} else {
+			__stdin_add_data(lg, a, s);
+			s = NULL;
+		}
+	}
+	free(buf);
+}
+
+static void stdin_update(struct lgroup *lg, void *arg)
+{
+	__stdin_update(lg, arg);
 }
 
 static void stdin_plot_debug(const struct lgroup *lg, void *arg)
@@ -94,24 +125,38 @@ static void stdin_plot_debug(const struct lgroup *lg, void *arg)
 	struct stdin_arg *a = arg;
 	struct plot *p = lg->plot;
 	int i;
+	char *buf = strdup(a->line_buff);
+	char *s = buf;
+
+	/**
+	 * Each stdin string ends with a newline character, but this affects
+	 * the output of other content when printing debug information.
+	 * Therefore, the newline character is replaced with a ';'.
+	 */
+	while (s && *s) {
+		if (*s == '\n')
+			*s = ';';
+		s++;
+	}
 
 	mvprintw(0, p->bnd.left + 1, "lgroup cnt %d, arg nline %d", lg->count,
 		 a->nline);
-	mvprintw(1, p->bnd.left + 1, "stdin: '%s'", a->line_buff);
+	mvprintw(1, p->bnd.left + 1, "stdin: '%s'", buf);
 
 	i = 0;
 	for_each_line(lg, line)
 	{
 		if (line->count <= 0)
-			mvprintw(i + 2, p->bnd.left + 1, "%s: %d", line->name,
+			mvprintw(i + 2, p->bnd.left + 1, "%s: %ld", line->name,
 				 line->count);
 		else
 			mvprintw(i + 2, p->bnd.left + 1,
-				 "%s: %d - %f - %lf~%lf", line->name,
+				 "%s: %ld - %f - %lf~%lf", line->name,
 				 line->count, line->tail->v, line->min->v,
 				 line->max->v);
 		i++;
 	}
+	free(buf);
 }
 
 static struct lgroup_operations stdin_ops = {

@@ -33,9 +33,10 @@ enum ltype_enum {
 
 struct line {
 	const char *name;
+	int id;
 	int color; /* C_RED, ... */
 	struct value *head, *tail, *max, *min;
-	int count; /* number of value */
+	long count; /* number of value */
 	struct line *next; /* maybe line in group */
 	struct lgroup *lg; /* belongs to */
 	const struct ldraw_ops *ops;
@@ -101,7 +102,7 @@ enum lcolor_enum color_name2n(const char *name);
 bool hascolor_name(const char *name);
 enum lcolor_enum nextcolor(enum lcolor_enum c);
 
-void line_add_val(struct line *l, double v);
+void line_add_value(struct line *l, double v, long limit);
 double line_range_max(struct line *l, int start, int len);
 double line_range_min(struct line *l, int start, int len);
 
