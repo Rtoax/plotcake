@@ -1,5 +1,5 @@
-ncurses-tools
-=============
+plotcake
+========
 
 # Usage Example
 
@@ -41,7 +41,7 @@ $ ./plotcake
        └──────────────────────────────────────────────────►
          10:14:46  10:14:56  10:15:06  10:15:16  10:15:26 Time
                                       Thu May 28 10:15:34 2026
-                             github.com/rtoax/test-linux v1.1.0
+                             github.com/rtoax/plotcake v1.1.0
 ```
 
 ## Memory Usage
@@ -83,5 +83,5 @@ $ while sleep .2; do \
        └─────────────────────────────────────────────────────────────►
             10:22:28  10:22:38  10:22:48  10:22:58  10:23:08  10:23:18ime
                                                  Thu May 28 10:23:24 2026
-                                        github.com/rtoax/test-linux v1.1.0
+                                        github.com/rtoax/plotcake v1.1.0
 ```

@@ -10,7 +10,7 @@
 #include "keyboard.h"
 
 chtype flavor[C_MAX] = { 0 };
-static const char *verstring = "github.com/rtoax/test-linux " MY_VERSION;
+static const char *verstring = GIT_REPO " " MY_VERSION;
 
 int plot_add(struct plot *p, struct lgroup *lg, void *lg_ops_arg)
 {
@@ -404,6 +404,18 @@ static void __plot_redraw(struct plot *p, bool debug)
 
 	paint_plot(p, debug);
 
+	if (p->help_expired_usec && p->help_expired_usec > usecs()) {
+		plot_help(p);
+	} else {
+		p->help_expired_usec = 0;
+	}
+
+	if (p->llabel_expired_usec && p->llabel_expired_usec > usecs()) {
+		plot_llabel(p);
+	} else {
+		p->llabel_expired_usec = 0;
+	}
+
 	refresh();
 
 	plot_update_size(p, false);
@@ -422,13 +434,8 @@ void plot_redraw(struct plot *p, bool debug)
 	}
 }
 
-/**
- * Press key 'h', display the help info
- */
-static void key_h(int key, void *arg)
+void plot_help(const struct plot *p)
 {
-	struct plot *p = arg;
-
 	int h = p->plotheight + p->bnd.top - 1;
 	int w = p->bnd.left + 1;
 
@@ -445,12 +452,8 @@ static void key_h(int key, void *arg)
 	attroff(flavor[C_BLUE] | A_BOLD);
 }
 
-/**
- * Press key 'l', display the label for each line.
- */
-static void key_l(int key, void *arg)
+void plot_llabel(const struct plot *p)
 {
-	struct plot *p = arg;
 	int i, nline = 0;
 
 	for_each_lg(p, lg)
@@ -480,6 +483,26 @@ static void key_l(int key, void *arg)
 }
 
 /**
+ * Press key 'h', display the help info
+ */
+static void key_h(int key, void *arg)
+{
+	struct plot *p = arg;
+	p->help_expired_usec = usecs() + 10e6;
+	plot_help(p);
+}
+
+/**
+ * Press key 'l', display the label for each line.
+ */
+static void key_l(int key, void *arg)
+{
+	struct plot *p = arg;
+	p->llabel_expired_usec = usecs() + 10e6;
+	plot_llabel(p);
+}
+
+/**
  * Press key 'r', reset plot
  */
 static void key_r(int key, void *arg)
@@ -487,6 +510,8 @@ static void key_r(int key, void *arg)
 	struct plot *p = arg;
 
 	plot_scaling_init(p);
+	p->help_expired_usec = 0;
+	p->llabel_expired_usec = 0;
 }
 
 void plot_init(struct plot *p)

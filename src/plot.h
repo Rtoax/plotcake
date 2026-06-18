@@ -6,7 +6,9 @@
 #include <stdarg.h>
 #include <stdbool.h>
 #include "config.h"
+#include "keyboard.h"
 #include "value.h"
+#include "utils.h"
 
 /**
  * Scaling plotting values, different from @plotscaling.
@@ -55,18 +57,14 @@ struct plot {
 
 	enum numerical_scaling v_scaling;
 
+	struct keyboard keyboard;
+
 	/**
-	 * record previous keyboard event.
+	 * If this value is greater than the current time, help information
+	 * will be displayed.
 	 */
-	struct {
-		struct {
-			unsigned long total;
-			unsigned long left, right, up, down;
-			unsigned long enter;
-			unsigned long h, l, r, t, v;
-		} cnt;
-		int current_key; /* read from STDIN/getch() or /dev/tty */
-	} keyboard;
+	unsigned long help_expired_usec;
+	unsigned long llabel_expired_usec;
 
 	/**
 	 * When something happens internally, such as a change in the drawing
@@ -113,6 +111,8 @@ void plot_draw_title(const struct plot *p);
 
 void plot_create_data(struct plot *p);
 void plot_update_data(struct plot *p);
+void plot_help(const struct plot *p);
+void plot_llabel(const struct plot *p);
 void plot_redraw(struct plot *p, bool debug);
 
 void init_flavor(void);
