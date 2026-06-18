@@ -5,10 +5,16 @@ ncurses-tools
 
 [Examples](https://github.com/ncurses-tools/assets/5e74a129-b045-4b9a-a993-cb1fac4a1ef8)
 
+## Help
+
+```bash
+$ ./plotcake --help
+```
+
 ## Loadavg
 
 ```bash
-$ ./loadavg
+$ ./plotcake
 ```
 
 ```
@@ -43,7 +49,7 @@ $ ./loadavg
 ```bash
 $ while sleep .2; do \
     free -m | grep ^Mem | awk '{print $2, $3, $4}'; \
-  done | ./loadavg --title 'Memory Usage' --xlabel 'Time' --ylabel 'Size(MB)' \
+  done | ./plotcake --title 'Memory Usage' --xlabel 'Time' --ylabel 'Size(MB)' \
 	-l total -l used -l free
 ```
 
