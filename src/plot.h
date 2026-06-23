@@ -57,7 +57,7 @@ struct plot {
 
 	enum numerical_scaling v_scaling;
 
-	struct keyboard keyboard;
+	struct keyboard *kb;
 
 	/**
 	 * If this value is greater than the current time, help information
@@ -72,6 +72,13 @@ struct plot {
 	 * trigger a redraw.
 	 */
 	bool need_redraw;
+
+#define PLOT_INF0_FMT \
+	"plot: redraw=%ld mem(%.3f MiB) win(%d,%d) max(%d,%d) plot(%d,%d) scale(%d)"
+#define PLOT_INF0_ARG(p)                                                \
+	p->redrawcount, plot_mem_size(p) * 1. / 1024 / 1024, p->height, \
+		p->width, p->heightmax, p->widthmax, p->plotheight,     \
+		p->plotwidth, p->plotscaling
 };
 
 #define for_each_lg(plt, iter)                                           \
@@ -97,13 +104,13 @@ struct plot {
 		}                                     \
 	} while (0)
 
-void plot_init(struct plot *p);
+void plot_init(struct plot *p, struct keyboard *k);
 unsigned long plot_mem_size(const struct plot *p);
 
 #define plot_warning(p, fmt...) __plot_warning(p, fmt)
 void __plot_warning(const struct plot *p, char *fmt, ...);
 
-int plot_add(struct plot *p, struct lgroup *lg, void *lg_ops_arg);
+int plot_add_lgrp(struct plot *p, struct lgroup *lg, void *lg_ops_arg);
 
 void plot_update_size(struct plot *p, bool init);
 void plot_draw_axes(const struct plot *p);

@@ -12,7 +12,7 @@
 chtype flavor[C_MAX] = { 0 };
 static const char *verstring = GIT_REPO " " MY_VERSION;
 
-int plot_add(struct plot *p, struct lgroup *lg, void *lg_ops_arg)
+int plot_add_lgrp(struct plot *p, struct lgroup *lg, void *lg_ops_arg)
 {
 	assert(lg->ops->create && "lgroup ops is not set, set it first");
 
@@ -84,7 +84,7 @@ void plot_update_size(struct plot *p, bool init)
 	 * change. We need to reset the maximum value to avoid excessive blank
 	 * space at the boundary.
 	 */
-	switch (p->keyboard.current_key) {
+	switch (p->kb->current_key) {
 	case 'r':
 	case 't':
 		p->bnd.top = p->bnd_prev_max.top;
@@ -239,7 +239,7 @@ static void paint_line(struct plot *p, struct line *ln, double max, double min,
 		else if (p->v_scaling == NS_EXPONENTIAL)
 			nc = snprintf(sv, 64, "exp(%.3f)=%.3f", v->v, plot_v);
 		else
-			nc = snprintf(sv, 64, "%.3f", v->v);
+			nc = snprintf(sv, 64, "%.3f", plot_v);
 
 		if (p->bnd_prev_max.left < nc)
 			p->bnd_prev_max.left = nc;
@@ -351,24 +351,9 @@ static void paint_plot(struct plot *p, bool debug)
 	mvaddstr(p->height - 1, p->width - strlen(verstring) - 1, verstring);
 
 	if (debug) {
-		mvprintw(
-			p->height - 2, 0,
-			"plot: mem(%.3f MiB) win(%d,%d) max(%d,%d) plot(%d,%d) "
-			"scale(%d) key(cnt=%ld,cur=%d=0x%x='%s')",
-			plot_mem_size(p) * 1. / 1024 / 1024, p->height,
-			p->width, p->heightmax, p->widthmax, p->plotheight,
-			p->plotwidth, p->plotscaling, p->keyboard.cnt.total,
-			p->keyboard.current_key, p->keyboard.current_key,
-			keyname(p->keyboard.current_key));
-		mvprintw(p->height - 1, 0,
-			 "      redraw=%ld, key(left=%ld,right=%ld,up=%ld,"
-			 "down=%ld,l=%ld,r=%ld,h=%ld,v=%ld,t=%ld,enter=%ld)",
-			 p->redrawcount, p->keyboard.cnt.left,
-			 p->keyboard.cnt.right, p->keyboard.cnt.up,
-			 p->keyboard.cnt.down, p->keyboard.cnt.l,
-			 p->keyboard.cnt.r, p->keyboard.cnt.h,
-			 p->keyboard.cnt.v, p->keyboard.cnt.t,
-			 p->keyboard.cnt.enter);
+		mvprintw(p->height - 2, 0, PLOT_INF0_FMT, PLOT_INF0_ARG(p));
+		mvprintw(p->height - 1, 0, KEYBOARD_INF0_FMT,
+			 KEYBOARD_INF0_ARG(p->kb));
 	}
 
 	move(0, 0);
@@ -400,7 +385,7 @@ static void __plot_redraw(struct plot *p, bool debug)
 	/**
 	 * Handle the keyboard first, because 'reset' need before paint.
 	 */
-	exec_key_handler(p->keyboard.current_key);
+	exec_key_handler(p->kb->current_key);
 
 	paint_plot(p, debug);
 
@@ -421,7 +406,7 @@ static void __plot_redraw(struct plot *p, bool debug)
 	plot_update_size(p, false);
 
 	/* do some reset */
-	p->keyboard.current_key = 0;
+	p->kb->current_key = 0;
 }
 
 void plot_redraw(struct plot *p, bool debug)
@@ -514,11 +499,13 @@ static void key_r(int key, void *arg)
 	p->llabel_expired_usec = 0;
 }
 
-void plot_init(struct plot *p)
+void plot_init(struct plot *p, struct keyboard *kb)
 {
 	memset(p, 0, sizeof(struct plot));
 
 	plot_scaling_init(p);
+
+	p->kb = kb;
 
 	register_key_handler('r', p, key_r);
 	register_key_handler('h', p, key_h);
