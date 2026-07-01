@@ -6,13 +6,14 @@
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
+#include "file.h"
 #include "plot.h"
 #include "keyboard.h"
 
 chtype flavor[C_MAX] = { 0 };
 static const char *verstring = GIT_REPO " " MY_VERSION;
 
-int plot_add_lgrp(struct plot *p, struct lgroup *lg, void *lg_ops_arg)
+int plot_add_lgroup(struct plot *p, struct lgroup *lg, void *lg_ops_arg)
 {
 	assert(lg->ops->create && "lgroup ops is not set, set it first");
 
@@ -25,8 +26,19 @@ int plot_add_lgrp(struct plot *p, struct lgroup *lg, void *lg_ops_arg)
 	}
 	p->lgtail = lg;
 	lg->plot = p;
+	lg->id = p->lgcount;
 	lg->ops->arg = lg_ops_arg;
 	return 0;
+}
+
+struct lgroup *plot_lgroup(const struct plot *p, int idx)
+{
+	for_each_lgroup(p, lg)
+	{
+		if (lg->id == idx)
+			return lg;
+	}
+	return NULL;
 }
 
 void init_flavor(void)
@@ -126,12 +138,12 @@ static void paint_line(struct plot *p, struct line *ln, double max, double min,
 
 	switch (p->v_scaling) {
 	case NS_LOGARITHMIC:
-		max = log(max);
-		min = log(min);
+		max = signed_log_trans(max);
+		min = signed_log_trans(min);
 		break;
 	case NS_LOGARITHMIC10:
-		max = log10(max);
-		min = log10(min);
+		max = signed_log10_trans(max);
+		min = signed_log10_trans(min);
 		break;
 	case NS_EXPONENTIAL:
 		max = exp(max);
@@ -174,11 +186,11 @@ static void paint_line(struct plot *p, struct line *ln, double max, double min,
 		}
 
 		if (p->v_scaling == NS_LOGARITHMIC)
-			plot_v = v->logarithmic_v;
+			plot_v = v->log_v;
 		else if (p->v_scaling == NS_LOGARITHMIC10)
-			plot_v = v->logarithmic10_v;
+			plot_v = v->log10_v;
 		else if (p->v_scaling == NS_EXPONENTIAL)
-			plot_v = v->exponential_v;
+			plot_v = v->exp_v;
 
 		if (max == min || max == 0.0 || max < min) {
 			diff = 0;
@@ -233,9 +245,11 @@ static void paint_line(struct plot *p, struct line *ln, double max, double min,
 		int nc;
 
 		if (p->v_scaling == NS_LOGARITHMIC)
-			nc = snprintf(sv, 64, "log(%.3f)=%.3f", v->v, plot_v);
+			nc = snprintf(sv, 64, "s*log(1+|%.3f|)=%.3f", v->v,
+				      plot_v);
 		else if (p->v_scaling == NS_LOGARITHMIC10)
-			nc = snprintf(sv, 64, "log10(%.3f)=%.3f", v->v, plot_v);
+			nc = snprintf(sv, 64, "s*log10(1+|%.3f|)=%.3f", v->v,
+				      plot_v);
 		else if (p->v_scaling == NS_EXPONENTIAL)
 			nc = snprintf(sv, 64, "exp(%.3f)=%.3f", v->v, plot_v);
 		else
@@ -266,9 +280,12 @@ void plot_draw_title(const struct plot *p)
 {
 	char buf[128], *title = buf;
 	if (p->v_scaling == NS_LOGARITHMIC)
-		snprintf(buf, 128, "%s (logarithmic)", p->title);
+		snprintf(buf, 128, "%s (signed logarithmic transformation)",
+			 p->title);
 	else if (p->v_scaling == NS_LOGARITHMIC10)
-		snprintf(buf, 128, "%s (base-10 logarithmic)", p->title);
+		snprintf(buf, 128,
+			 "%s (base-10 signed logarithmic transformation)",
+			 p->title);
 	else if (p->v_scaling == NS_EXPONENTIAL)
 		snprintf(buf, 128, "%s (base-e exponential)", p->title);
 	else
@@ -336,7 +353,7 @@ static void paint_plot(struct plot *p, bool debug)
 	plot_draw_title(p);
 	plot_draw_axes(p);
 
-	for_each_lg(p, lg)
+	for_each_lgroup(p, lg)
 	{
 		paint_lgroup(p, lg, debug);
 	}
@@ -361,7 +378,7 @@ static void paint_plot(struct plot *p, bool debug)
 
 void plot_create_data(struct plot *p)
 {
-	for_each_lg(p, lg)
+	for_each_lgroup(p, lg)
 	{
 		lg->ops->create(lg, lg->ops->arg);
 	}
@@ -369,7 +386,7 @@ void plot_create_data(struct plot *p)
 
 void plot_update_data(struct plot *p)
 {
-	for_each_lg(p, lg)
+	for_each_lgroup(p, lg)
 	{
 		lg->ops->update(lg, lg->ops->arg);
 	}
@@ -419,21 +436,21 @@ void plot_redraw(struct plot *p, bool debug)
 	}
 }
 
+static const char *key_helps[] = {
+	KEY_HELP_h,    KEY_HELP_l,     KEY_HELP_q,     KEY_HELP_r,
+	KEY_HELP_t,    KEY_HELP_v,     KEY_HELP_UP,    KEY_HELP_DOWN,
+	KEY_HELP_LEFT, KEY_HELP_RIGHT, KEY_HELP_ENTER,
+};
+
 void plot_help(const struct plot *p)
 {
 	int h = p->plotheight + p->bnd.top - 1;
 	int w = p->bnd.left + 1;
+	int n = sizeof(key_helps) / sizeof(key_helps[0]);
 
 	attron(flavor[C_BLUE] | A_BOLD);
-	mvprintw(h - 8, w, KEY_HELP_h);
-	mvprintw(h - 7, w, KEY_HELP_l);
-	mvprintw(h - 6, w, KEY_HELP_q);
-	mvprintw(h - 5, w, KEY_HELP_r);
-	mvprintw(h - 4, w, KEY_HELP_t);
-	mvprintw(h - 3, w, KEY_HELP_v);
-	mvprintw(h - 2, w, KEY_HELP_UP);
-	mvprintw(h - 1, w, KEY_HELP_DOWN);
-	mvprintw(h, w, KEY_HELP_ENTER);
+	for (int i = n - 1; i >= 0; i--)
+		mvprintw(h - i, w, key_helps[n - i - 1]);
 	attroff(flavor[C_BLUE] | A_BOLD);
 }
 
@@ -441,7 +458,7 @@ void plot_llabel(const struct plot *p)
 {
 	int i, nline = 0;
 
-	for_each_lg(p, lg)
+	for_each_lgroup(p, lg)
 	{
 		nline += lg->count;
 	}
@@ -450,7 +467,7 @@ void plot_llabel(const struct plot *p)
 	int w = p->bnd.left + 1;
 
 	i = 0;
-	for_each_lg(p, lg)
+	for_each_lgroup(p, lg)
 	{
 		for_each_line(lg, ln)
 		{
@@ -499,8 +516,10 @@ static void key_r(int key, void *arg)
 	p->llabel_expired_usec = 0;
 }
 
-void plot_init(struct plot *p, struct keyboard *kb)
+int plot_init(struct plot *p, struct keyboard *kb, const char *file)
 {
+	int err = 0;
+
 	memset(p, 0, sizeof(struct plot));
 
 	plot_scaling_init(p);
@@ -510,13 +529,18 @@ void plot_init(struct plot *p, struct keyboard *kb)
 	register_key_handler('r', p, key_r);
 	register_key_handler('h', p, key_h);
 	register_key_handler('l', p, key_l);
+
+	if (file)
+		err = err ?: load_plot(p, file);
+
+	return err;
 }
 
 /* Get memory bytes that plot already spent */
 unsigned long plot_mem_size(const struct plot *p)
 {
 	unsigned long bytes = sizeof(struct plot);
-	for_each_lg(p, lg)
+	for_each_lgroup(p, lg)
 	{
 		bytes += sizeof(struct lgroup);
 		for_each_line(lg, ln)

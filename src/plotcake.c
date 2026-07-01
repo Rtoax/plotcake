@@ -70,23 +70,27 @@ const char argp_prog_doc[] = ANSI_BOLD
 	"   " KEY_HELP_ENTER "\n"
 	"   " KEY_HELP_UP "\n"
 	"   " KEY_HELP_DOWN "\n"
+	"   " KEY_HELP_LEFT "\n"
+	"   " KEY_HELP_RIGHT "\n"
 	"\n" ANSI_BOLD "OPTIONS:" ANSI_RST;
 
 static const struct argp_option opts[] = {
-	{ "title", 'T', "TITLE", 0, "Spedify title" },
-	{ "xlabel", 'x', "X LABEL", 0, "Spedify x axis label" },
-	{ "ylabel", 'y', "Y LABEL", 0, "Spedify y axis label" },
-	{ "llabel", 'l', "LINE NAME", 0,
-	  "Spedify line label (may be listed multiple times)" },
-	{ "ltype", 'L', "LINE TYPE", 0,
-	  "Spedify line types, if an invalid value is entered, the supported "
+	{ "title", 'T', "TITLE", 0, "Specify title" },
+	{ "xlabel", 'x', "LABEL", 0, "Specify x axis label" },
+	{ "ylabel", 'y', "LABEL", 0, "Specify y axis label" },
+	{ "llabel", 'l', "NAME", 0,
+	  "Specify line label (may be listed multiple times)" },
+	{ "ltype", 'L', "TYPE", 0,
+	  "Specify line types, if an invalid value is entered, the supported "
 	  "line types will be listed (may be listed multiple times)" },
-	{ "lcolor", 'C', "LINE COLOR", 0,
-	  "Spedify line colors, if an invalid value is entered, the supported "
+	{ "lcolor", 'C', "COLOR", 0,
+	  "Specify line colors, if an invalid value is entered, the supported "
 	  "line colors will be listed, can match color prefixes, such as 'r' "
 	  "matching 'red' (may be listed multiple times)" },
 	{ "ram", 'M', NULL, 1, "Display memory instead of loadavg" },
-	{ "interval", 'I', "INTERVAL SEC", 0, "Spedify interval seconds" },
+	{ "interval", 'I', "SEC", 0,
+	  "Specify interval time, the default unit is nanoseconds, but units "
+	  "such as 's', 'ms', 'us', and 'ns' can also be used." },
 	{ "logarithmic", ARG_LOGARITHMIC, NULL, 1,
 	  "Use natural logarithmic (shortcut " KEY_HELP_t ")" },
 	{ "logarithmic10", ARG_LOGARITHMIC10, NULL, 1,
@@ -95,7 +99,18 @@ static const struct argp_option opts[] = {
 	  "different (shortcut " KEY_HELP_t ")" },
 	{ "exponential", ARG_EXPONENTIAL, NULL, 1,
 	  "Use base-e exponential (shortcut " KEY_HELP_t ")" },
-	{ "tmout", 't', "TIMEOUT SEC", 0, "Spedify timeout seconds" },
+	{ "tmout", 't', "SEC", 0,
+	  "Specify timeout time, the default unit is nanoseconds, but units "
+	  "such as 's', 'ms', 'us', and 'ns' can also be used." },
+	{ "ofile", 'o', "OFILE", 0,
+	  "Specify the output file name, excluding the extension." },
+	{ "file", 'f', "FILE", 0,
+	  "Specify input file, the format must conform to the plotcake file "
+	  "format. You can run plotcake once to view the generated files (txt"
+#ifdef HAVE_JSON_C
+	  " and json"
+#endif
+	  ")." },
 	{ "verbose", 'v', NULL, 1,
 	  "Display detail (shortcut: " KEY_HELP_v ")" },
 	{ "version", 'V', NULL, 1, "Display version" },
@@ -106,10 +121,13 @@ static int sig_rd_fd, sig_wr_fd;
 static int done = false;
 static int ram = false;
 static int verbose = false;
-static int tmout_sec = -1;
-static int interval_sec = 1;
-
-static char data_from_stdin[256] = { 0 };
+static unsigned long tmout_nsecs = 0;
+static unsigned long interval_nsecs = 1000000000UL;
+static char *output_file_prefix = NULL;
+static char *file = NULL;
+static char *title = NULL;
+static char *xlabel = NULL;
+static char *ylabel = NULL;
 
 struct plot plot = { 0 };
 struct keyboard keyboard = { 0 };
@@ -136,7 +154,7 @@ static error_t parse_arg(int opt, char *arg, struct argp_state *state)
 {
 	switch (opt) {
 	case 'T':
-		plot.title = arg;
+		title = arg;
 		break;
 	case 'l':
 		enqueue_llabel(arg);
@@ -149,17 +167,17 @@ static error_t parse_arg(int opt, char *arg, struct argp_state *state)
 	case 'C':
 		if (!hascolor_name(arg))
 			exit(EXIT_FAILURE);
-		enqueue_lcolor(color_name2n(arg));
+		enqueue_lcolor(color_name2num(arg));
 		break;
 	case 'x':
-		plot.label_x = arg;
+		xlabel = arg;
 		break;
 	case 'y':
-		plot.label_y = arg;
+		ylabel = arg;
 		break;
 	case 't':
-		tmout_sec = atoi(arg);
-		if (tmout_sec <= 0) {
+		tmout_nsecs = str2nsecs(arg);
+		if (tmout_nsecs == 0) {
 			fprintf(stderr, "ERROR: bad -t value\n");
 			exit(EXIT_FAILURE);
 		}
@@ -174,14 +192,20 @@ static error_t parse_arg(int opt, char *arg, struct argp_state *state)
 		plot.v_scaling = NS_LOGARITHMIC10;
 		break;
 	case 'I':
-		interval_sec = atoi(arg);
-		if (interval_sec <= 0) {
+		interval_nsecs = str2nsecs(arg);
+		if (interval_nsecs == 0) {
 			fprintf(stderr, "ERROR: bad -I value\n");
 			exit(EXIT_FAILURE);
 		}
 		break;
 	case 'M':
 		ram = true;
+		break;
+	case 'f':
+		file = strdup(arg);
+		break;
+	case 'o':
+		output_file_prefix = strdup(arg);
 		break;
 	case 'v':
 		verbose = true;
@@ -206,23 +230,42 @@ static const struct argp argp = {
 	.doc = argp_prog_doc,
 };
 
+static int new_timerfd(unsigned long nsecs)
+{
+	int timerfd = timerfd_create(CLOCK_REALTIME, TFD_CLOEXEC);
+	unsigned long secs = nsecs / 1000000000UL;
+	nsecs -= secs * 1000000000UL;
+	struct itimerspec to = { { secs, nsecs }, { secs, nsecs } };
+	timerfd_settime(timerfd, 0, &to, NULL);
+	return timerfd;
+}
+
 int main(int argc, char *argv[])
 {
+	int err = 0;
 	int maxfd = 0;
-	int timerfd, keyfd, datafd, tmoutfd;
+	int freshtimerfd, keyfd, stdinfd, tmoutfd;
 	int sigpipe[2];
 	fd_set readfds;
+	char stdin_buffer[4096] = { 0 };
 
-	keyboard_init(&keyboard);
-	plot_init(&plot, &keyboard);
-
-	int err = argp_parse(&argp, argc, argv, 0, NULL, NULL);
+	err = argp_parse(&argp, argc, argv, 0, NULL, NULL);
 	if (err) {
-		fprintf(stderr, "argp_parse return %d\n", err);
+		fprintf(stderr, "args parse failed %d\n", err);
 		return -err;
 	}
 
+	keyboard_init(&keyboard);
+	err = plot_init(&plot, &keyboard, file);
+	if (err) {
+		fprintf(stderr, "plot init failed, %s\n", strerror(-err));
+		return err;
+	}
+
 	setlocale(LC_ALL, "");
+
+	signal(SIGINT, sig_handler);
+	signal(SIGWINCH, sig_handler);
 
 	if (pipe(sigpipe) != 0) {
 		perror("pipe");
@@ -232,7 +275,7 @@ int main(int argc, char *argv[])
 	sig_rd_fd = sigpipe[0];
 	sig_wr_fd = sigpipe[1];
 
-	tmoutfd = timerfd = keyfd = datafd = -1;
+	tmoutfd = freshtimerfd = keyfd = stdinfd = -1;
 
 	FD_ZERO(&readfds);
 
@@ -250,7 +293,7 @@ int main(int argc, char *argv[])
 			fprintf(stderr, "ERROR: open /dev/tty failed, %m\n");
 			exit(EXIT_FAILURE);
 		}
-		datafd = STDIN_FILENO;
+		stdinfd = STDIN_FILENO;
 	} else
 		keyfd = STDIN_FILENO;
 
@@ -258,28 +301,25 @@ int main(int argc, char *argv[])
 	if (maxfd < keyfd)
 		maxfd = keyfd;
 
-	if (datafd != -1) {
-		FD_SET(datafd, &readfds);
-		if (maxfd < datafd)
-			maxfd = datafd;
-	} else {
+	if (stdinfd != -1) {
+		FD_SET(stdinfd, &readfds);
+		if (maxfd < stdinfd)
+			maxfd = stdinfd;
+	} else if (!file) {
 		/**
-		 * When we read data from stdin, we no longer need a timer to
-		 * trigger the update.
+		 * Not create fresh timer if read data from file.
+		 *
+		 * Note: When we read data from stdin, we no longer need this
+		 * timer to trigger the update.
 		 */
-		timerfd = timerfd_create(CLOCK_REALTIME, TFD_CLOEXEC);
-		struct itimerspec to = { { interval_sec, 0 },
-					 { interval_sec, 0 } };
-		timerfd_settime(timerfd, 0, &to, NULL);
-		FD_SET(timerfd, &readfds);
-		if (maxfd < timerfd)
-			maxfd = timerfd;
+		freshtimerfd = new_timerfd(interval_nsecs);
+		FD_SET(freshtimerfd, &readfds);
+		if (maxfd < freshtimerfd)
+			maxfd = freshtimerfd;
 	}
 
-	if (tmout_sec != -1) {
-		tmoutfd = timerfd_create(CLOCK_REALTIME, TFD_CLOEXEC);
-		struct itimerspec to = { { tmout_sec, 0 }, { tmout_sec, 0 } };
-		timerfd_settime(tmoutfd, 0, &to, NULL);
+	if (tmout_nsecs != 0) {
+		tmoutfd = new_timerfd(tmout_nsecs);
 		FD_SET(tmoutfd, &readfds);
 		if (maxfd < tmoutfd)
 			maxfd = tmoutfd;
@@ -288,9 +328,6 @@ int main(int argc, char *argv[])
 	FD_SET(sig_rd_fd, &readfds);
 	if (maxfd < sig_rd_fd)
 		maxfd = sig_rd_fd;
-
-	signal(SIGINT, sig_handler);
-	signal(SIGWINCH, sig_handler);
 
 	/* curses start from here */
 
@@ -321,32 +358,35 @@ int main(int argc, char *argv[])
 
 	init_flavor();
 
-	if (datafd == -1) {
-		if (ram) {
-			plot.title = plot.title ?: "Memory Usage";
-			plot.label_x = plot.label_x ?: "Time";
-			plot.label_y = plot.label_y ?: "Size(MB)";
-			plot_add_lgrp(&plot, &lg_ram, NULL);
-		} else {
-			plot.title = plot.title ?: "Loadavg";
-			plot.label_x = plot.label_x ?: "Time";
-			plot.label_y = plot.label_y ?: "Load";
-			plot_add_lgrp(&plot, &lg_loadavg, NULL);
+	if (stdinfd == -1) {
+		if (!file && ram) {
+			plot.title = plot.title ?: (title ?: "Memory Usage");
+			plot.label_x = plot.label_x ?: (xlabel ?: "Time");
+			plot.label_y = plot.label_y ?: (ylabel ?: "Size(MB)");
+			plot_add_lgroup(&plot, &lg_ram, NULL);
+		} else if (!file) {
+			plot.title = plot.title ?: (title ?: "Loadavg");
+			plot.label_x = plot.label_x ?: (xlabel ?: "Time");
+			plot.label_y = plot.label_y ?: (ylabel ?: "Load");
+			plot_add_lgroup(&plot, &lg_loadavg, NULL);
 		}
 	} else {
 		struct stdin_arg stdarg = {
 			.nline = 1, /* at least one line */
-			.line_buff = data_from_stdin,
+			.line_buff = stdin_buffer,
 		};
-		plot.title = plot.title ?: "stdin";
-		plot.label_x = plot.label_x ?: "Time";
-		plot.label_y = plot.label_y ?: "Value";
-		plot_add_lgrp(&plot, &lg_stdin, &stdarg);
+		plot.title = plot.title ?: (title ?: "stdin");
+		plot.label_x = plot.label_x ?: (xlabel ?: "Time");
+		plot.label_y = plot.label_y ?: (ylabel ?: "Value");
+		plot_add_lgroup(&plot, &lg_stdin, &stdarg);
 	}
 
-	plot_create_data(&plot);
+	/* Read from 'file' instead of create()/update() */
+	if (!file) {
+		plot_create_data(&plot);
+		plot_update_data(&plot);
+	}
 	plot_update_size(&plot, true);
-	plot_update_data(&plot);
 	plot_redraw(&plot, verbose);
 
 	/* main loop */
@@ -454,9 +494,9 @@ int main(int argc, char *argv[])
 					break;
 				}
 			}
-		} else if (ret > 0 && FD_ISSET(timerfd, &fds)) {
+		} else if (ret > 0 && FD_ISSET(freshtimerfd, &fds)) {
 			uint64_t exp;
-			read(timerfd, &exp, sizeof(exp));
+			read(freshtimerfd, &exp, sizeof(exp));
 			redraw = true;
 			plot_update_data(&plot);
 		} else if (ret > 0 && FD_ISSET(tmoutfd, &fds)) {
@@ -480,10 +520,11 @@ int main(int argc, char *argv[])
 					redraw = true;
 				}
 			}
-		} else if (ret > 0 && datafd != -1 && FD_ISSET(datafd, &fds)) {
-			memset(data_from_stdin, 0, sizeof(data_from_stdin));
-			ssize_t cnt = read(datafd, data_from_stdin,
-					   sizeof(data_from_stdin));
+		} else if (ret > 0 && stdinfd != -1 &&
+			   FD_ISSET(stdinfd, &fds)) {
+			memset(stdin_buffer, 0, sizeof(stdin_buffer));
+			ssize_t cnt = read(stdinfd, stdin_buffer,
+					   sizeof(stdin_buffer));
 			if (cnt > 0) {
 				redraw = true;
 			}
@@ -496,10 +537,10 @@ int main(int argc, char *argv[])
 	}
 
 end:
-	if (datafd != -1)
-		close(datafd);
-	if (timerfd != -1)
-		close(timerfd);
+	if (stdinfd != -1)
+		close(stdinfd);
+	if (freshtimerfd != -1)
+		close(freshtimerfd);
 	if (tmoutfd != -1)
 		close(tmoutfd);
 	if (keyfd != STDIN_FILENO && keyfd != -1)
@@ -508,12 +549,17 @@ end:
 	close(sig_wr_fd);
 	endwin();
 
+	if (file)
+		free(file);
+
 	if (verbose) {
 		struct plot *_p = &plot;
 		fprintf(stderr, PLOT_INF0_FMT "\n", PLOT_INF0_ARG(_p));
 		fprintf(stderr, KEYBOARD_INF0_FMT "\n",
 			KEYBOARD_INF0_ARG(_p->kb));
 	}
-	save_plot(&plot);
+	save_plot(&plot, output_file_prefix);
+	if (output_file_prefix)
+		free(output_file_prefix);
 	return 0;
 }

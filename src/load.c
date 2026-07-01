@@ -22,7 +22,7 @@ static void loadavg_update(struct lgroup *lg, void *arg)
 
 	for_each_line(lg, line)
 	{
-		line_add_value(line, avg[i], -1);
+		line_add_value(line, avg[i], -1, NULL);
 		i++;
 	}
 }
@@ -33,8 +33,8 @@ static void loadavg_plot_debug(const struct lgroup *lg, void *arg)
 	int i = 0;
 	for_each_line(lg, ln)
 	{
-		mvprintw(i + 1, p->bnd.left + 1, "%s: cnt=%ld %lf~%lf",
-			 ln->name, ln->count, ln->min->v, ln->max->v);
+		mvprintw(i + 2, p->bnd.left + 1, "%s: %d %ld %lf~%lf", ln->name,
+			 ln->id, ln->count, ln->min->v, ln->max->v);
 		i++;
 	}
 }
@@ -46,5 +46,6 @@ static struct lgroup_operations loadavg_ops = {
 };
 
 struct lgroup lg_loadavg = {
+	.name = "loadavg",
 	.ops = &loadavg_ops,
 };

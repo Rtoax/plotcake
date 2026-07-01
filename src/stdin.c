@@ -79,9 +79,9 @@ static void __stdin_add_data(struct lgroup *lg, struct stdin_arg *a, char *buf)
 		 * above it.
 		 */
 		if (i < narg) {
-			line_add_value(line, values[i], -1);
+			line_add_value(line, values[i], -1, NULL);
 		} else {
-			line_add_value(line, line->tail->v, -1);
+			line_add_value(line, line->tail->v, -1, NULL);
 		}
 		i++;
 	}
@@ -139,21 +139,21 @@ static void stdin_plot_debug(const struct lgroup *lg, void *arg)
 		s++;
 	}
 
-	mvprintw(0, p->bnd.left + 1, "lgroup cnt %d, arg nline %d", lg->count,
+	mvprintw(2, p->bnd.left + 1, "lgroup cnt %d, arg nline %d", lg->count,
 		 a->nline);
-	mvprintw(1, p->bnd.left + 1, "stdin: '%s'", buf);
+	mvprintw(3, p->bnd.left + 1, "stdin: '%s'", buf);
 
 	i = 0;
-	for_each_line(lg, line)
+	for_each_line(lg, ln)
 	{
-		if (line->count <= 0)
-			mvprintw(i + 2, p->bnd.left + 1, "%s: %ld", line->name,
-				 line->count);
+		if (ln->count <= 0)
+			mvprintw(i + 4, p->bnd.left + 1, "%s: %d %ld", ln->name,
+				 ln->id, ln->count);
 		else
-			mvprintw(i + 2, p->bnd.left + 1,
-				 "%s: %ld - %f - %lf~%lf", line->name,
-				 line->count, line->tail->v, line->min->v,
-				 line->max->v);
+			mvprintw(i + 5, p->bnd.left + 1,
+				 "%s: %d %ld %f - %lf~%lf", ln->name, ln->id,
+				 ln->count, ln->tail->v, ln->min->v,
+				 ln->max->v);
 		i++;
 	}
 	free(buf);
@@ -166,5 +166,6 @@ static struct lgroup_operations stdin_ops = {
 };
 
 struct lgroup lg_stdin = {
+	.name = "stdin",
 	.ops = &stdin_ops,
 };

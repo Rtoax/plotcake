@@ -74,14 +74,14 @@ struct plot {
 	bool need_redraw;
 
 #define PLOT_INF0_FMT \
-	"plot: redraw=%ld mem(%.3f MiB) win(%d,%d) max(%d,%d) plot(%d,%d) scale(%d)"
+	"plot(redraw=%ld, %.3f MiB, win[%d,%d], max[%d,%d], plot[%d,%d], scale %d)"
 #define PLOT_INF0_ARG(p)                                                \
 	p->redrawcount, plot_mem_size(p) * 1. / 1024 / 1024, p->height, \
 		p->width, p->heightmax, p->widthmax, p->plotheight,     \
 		p->plotwidth, p->plotscaling
 };
 
-#define for_each_lg(plt, iter)                                           \
+#define for_each_lgroup(plt, iter)                                       \
 	for (struct lgroup *iter = ((struct plot *)(plt))->lghead; iter; \
 	     iter = iter->next)
 
@@ -104,13 +104,14 @@ struct plot {
 		}                                     \
 	} while (0)
 
-void plot_init(struct plot *p, struct keyboard *k);
+int plot_init(struct plot *p, struct keyboard *k, const char *file);
 unsigned long plot_mem_size(const struct plot *p);
 
 #define plot_warning(p, fmt...) __plot_warning(p, fmt)
 void __plot_warning(const struct plot *p, char *fmt, ...);
 
-int plot_add_lgrp(struct plot *p, struct lgroup *lg, void *lg_ops_arg);
+int plot_add_lgroup(struct plot *p, struct lgroup *lg, void *lg_ops_arg);
+struct lgroup *plot_lgroup(const struct plot *p, int idx);
 
 void plot_update_size(struct plot *p, bool init);
 void plot_draw_axes(const struct plot *p);

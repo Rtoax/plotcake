@@ -94,7 +94,7 @@ enum lcolor_enum nextcolor(enum lcolor_enum c)
 	return c % C_MAX;
 }
 
-const static char *color_names[C_MAX] = {
+const char *color_names[C_MAX] = {
 	[C_GREEN] = "green",   [C_RED] = "red",		[C_CYAN] = "cyan",
 	[C_WHITE] = "white",   [C_MAGENTA] = "magenta", [C_BLUE] = "blue",
 	[C_YELLOW] = "yellow",
@@ -103,7 +103,7 @@ const static char *color_names[C_MAX] = {
 /**
  * @return: return C_UNKNOWN if not found.
  */
-enum lcolor_enum color_name2n(const char *name)
+enum lcolor_enum color_name2num(const char *name)
 {
 	for (int i = 0; i < C_MAX; i++)
 		if (!strncasecmp(color_names[i], name, strlen(name)))
@@ -120,7 +120,7 @@ enum lcolor_enum color_name2n(const char *name)
 
 bool hascolor_name(const char *name)
 {
-	return color_name2n(name) != C_UNKNOWN;
+	return color_name2num(name) != C_UNKNOWN;
 }
 
 static int dequeue_value_from_head(struct line *l)
@@ -153,15 +153,18 @@ static int dequeue_value_from_head(struct line *l)
 	return v;
 }
 
-static int enqueue_value_to_tail(struct line *l, double v)
+static int enqueue_value_to_tail(struct line *l, double v, struct timeval *tv)
 {
 	struct value *new = malloc(sizeof(struct value));
 
 	new->v = v;
-	new->logarithmic_v = log(v);
-	new->logarithmic10_v = log10(v);
-	new->exponential_v = exp(v);
-	gettimeofday(&new->tv, NULL);
+	new->log_v = signed_log_trans(v);
+	new->log10_v = signed_log10_trans(v);
+	new->exp_v = exp(v);
+	if (tv)
+		memcpy(&new->tv, tv, sizeof(struct timeval));
+	else
+		gettimeofday(&new->tv, NULL);
 	new->next = NULL;
 
 	if (!l->head) {
@@ -246,10 +249,11 @@ double line_range_min(struct line *l, int start, int len)
 
 /**
  * @limit: max length of line (number of values), if < 0, means no limit.
+ * @tv: set timeval.
  */
-void line_add_value(struct line *l, double v, long limit)
+void line_add_value(struct line *l, double v, long limit, struct timeval *tv)
 {
-	enqueue_value_to_tail(l, v);
+	enqueue_value_to_tail(l, v, tv);
 
 	/**
 	 * Due to the limited width of the screen or size of memory, we
@@ -276,7 +280,7 @@ static struct line *__create_line(const char *name, int color)
 	return new;
 }
 
-static int lgroup_add(struct lgroup *lg, struct line *l)
+static int __lgroup_add_line(struct lgroup *lg, struct line *l)
 {
 	if (!lg->head) {
 		lg->head = l;
@@ -294,13 +298,24 @@ struct line *new_line_ops(struct lgroup *lg, const char *name, int color,
 			  const struct ldraw_ops *ops)
 {
 	struct line *new = __create_line(name, color);
+	__lgroup_add_line(lg, new);
 	new->ops = ops;
 	new->id = lg->count;
-	lgroup_add(lg, new);
 	return new;
 }
 
 struct line *new_line(struct lgroup *lg, const char *name, int color)
 {
 	return new_line_ops(lg, name, color, ldraw_type2ops(dequeue_ltype()));
+}
+
+/* Get lgroup's line from index */
+struct line *lgroup_line(const struct lgroup *lg, int idx)
+{
+	for_each_line(lg, ln)
+	{
+		if (ln->id == idx)
+			return ln;
+	}
+	return NULL;
 }
