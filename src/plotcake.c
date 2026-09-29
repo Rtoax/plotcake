@@ -27,10 +27,10 @@
 #include <string.h>
 #include <signal.h>
 #include <sys/time.h>
-#include <sys/timerfd.h>
 #include <time.h>
 #include <ncurses.h>
 #include <unistd.h>
+#include <sys/epoll.h>
 #include "file.h"
 #include "loadavg.h"
 #include "keyboard.h"
@@ -39,6 +39,9 @@
 #include "ram.h"
 #include "stdin.h"
 #include "axis.h"
+#include "utils.h"
+#include "fd-handler.h"
+#include "plotcake.h"
 
 enum {
 	ARG_LOGARITHMIC = 200,
@@ -144,8 +147,8 @@ static const struct argp_option opts[] = {
 	{},
 };
 
+static int epollfd = -1;
 static int sig_rd_fd, sig_wr_fd;
-static int done = false;
 static int ram = false;
 static int verbose = false;
 static unsigned long tmout_nsecs = 0;
@@ -159,8 +162,10 @@ static enum curve_type curve_type = CURVE_TYPE_NONE;
 static enum x_axis_type x_type = X_TIMEVAL;
 static enum ltype_enum axis_curve_type = LINE_TYPE_THIN_UNICODE;
 
-struct plot plot = { 0 };
-struct keyboard keyboard = { 0 };
+static struct plot plot = { 0 };
+static struct keyboard keyboard = { 0 };
+
+static char stdin_buffer[512] = { 0 };
 
 void sig_handler(int signo)
 {
@@ -281,25 +286,6 @@ static const struct argp argp = {
 	.doc = argp_prog_doc,
 };
 
-static int new_timerfd(unsigned long nsecs)
-{
-	int timerfd;
-	unsigned long secs;
-
-	/* default 1s */
-	if (nsecs == 0)
-		nsecs = 1000000000UL;
-
-	timerfd = timerfd_create(CLOCK_REALTIME, TFD_CLOEXEC);
-
-	secs = nsecs / 1000000000UL;
-	nsecs -= secs * 1000000000UL;
-
-	struct itimerspec to = { { secs, nsecs }, { secs, nsecs } };
-	timerfd_settime(timerfd, 0, &to, NULL);
-	return timerfd;
-}
-
 static int update_data_and_check_interval(struct plot *p)
 {
 	static unsigned long last_plot_usecs = 0;
@@ -320,14 +306,202 @@ static int update_data_and_check_interval(struct plot *p)
 	return 1;
 }
 
+int epoll_add_fd(int fd)
+{
+	struct epoll_event event;
+	event.data.fd = fd;
+	event.events = EPOLLIN;
+	return epoll_ctl(epollfd, EPOLL_CTL_ADD, fd, &event);
+}
+
+int epoll_del_fd(int fd)
+{
+	return epoll_ctl(epollfd, EPOLL_CTL_DEL, fd, NULL);
+}
+
+struct redraw_arg {
+	bool *redraw;
+	bool should_end;
+	struct plot *plot;
+};
+
+static int tmout_handler(int fd, void *arg)
+{
+	struct redraw_arg *a = arg;
+	uint64_t exp;
+	read(fd, &exp, sizeof(exp));
+	broadcast_sig(SIGINT);
+	a->should_end = true;
+	return 0;
+}
+
+static int fresher_handler(int fd, void *arg)
+{
+	struct redraw_arg *a = arg;
+	uint64_t exp;
+	read(fd, &exp, sizeof(exp));
+	*a->redraw = true;
+	update_data_and_check_interval(a->plot);
+	return 0;
+}
+
+static int key_handler(int fd, void *arg)
+{
+	int count = 0;
+	struct redraw_arg *a = arg;
+	bool redraw = false;
+	struct plot *plot = a->plot;
+
+	/**
+	 * open("/dev/tty")
+	 */
+	if (fd != STDIN_FILENO) {
+		int key = 0;
+		count = read(fd, &key, sizeof(key));
+		if (count > 0) {
+			/* convert to ncurses KEY */
+			switch (key) {
+			case 0x444f1b:
+			case 0x445b1b:
+				key = KEY_LEFT;
+				break;
+			case 0x434f1b:
+			case 0x435b1b:
+				key = KEY_RIGHT;
+				break;
+			case 0x424f1b:
+			case 0x425b1b:
+				key = KEY_DOWN;
+				break;
+			case 0x414f1b:
+			case 0x415b1b:
+				key = KEY_UP;
+				break;
+			default:
+				/* Handle more here */
+				break;
+			}
+			plot->kb->current_key = key;
+		} else {
+			plot->kb->current_key = ERR;
+		}
+	} else {
+		/**
+		 * STDIN_FILENO
+		 */
+		/* need keypad() and nodelay() */
+		plot->kb->current_key = wgetch(plot->win);
+		count = 1;
+	}
+
+	if (plot->kb->current_key != ERR) {
+		plot->kb->cnt.total += count;
+		switch (plot->kb->current_key) {
+		case KEY_LEFT:
+			plot->kb->cnt.left++;
+			redraw = true;
+			break;
+		case KEY_RIGHT:
+			plot->kb->cnt.right++;
+			redraw = true;
+			break;
+		case KEY_UP:
+			plot->kb->cnt.up++;
+			redraw = true;
+			break;
+		case KEY_DOWN:
+			plot->kb->cnt.down++;
+			redraw = true;
+			break;
+		case 'q': /* quit */
+			broadcast_sig(SIGINT);
+			a->should_end = true;
+			break;
+		case 'v': /* verbose mode switch */
+			plot->kb->cnt.v++;
+			redraw = true;
+			verbose = !verbose;
+			break;
+		case 'r': /* reset plot */
+			plot->kb->cnt.r++;
+			redraw = true;
+			break;
+		/* select numerical scaling type */
+		case 't':
+			plot->kb->cnt.t++;
+			redraw = true;
+			break;
+		case 'h': /* help */
+			plot->kb->cnt.h++;
+			redraw = true;
+			break;
+		case 'l': /* list line labels */
+			plot->kb->cnt.l++;
+			redraw = true;
+			break;
+		/**
+		 * Sometimes, the arrow keys can accidentally trigger Esc,
+		 * which causes the program to exit, so plotcake should ignore
+		 * the Esc key like the 'top' command.
+		 */
+		case 27: /* Esc, 0x1B, 033, ^[ */
+		case 13: /* enter */
+			plot->kb->cnt.enter++;
+			redraw = true;
+			break;
+		}
+	}
+	*a->redraw = redraw;
+	return 0;
+}
+
+static int sig_rd_handler(int fd, void *arg)
+{
+	unsigned char signo;
+	struct redraw_arg *a = arg;
+	bool redraw = false;
+	struct plot *plot = a->plot;
+
+	const ssize_t cnt = read(fd, &signo, 1);
+	if (cnt > 0) {
+		if (signo == SIGINT) {
+			a->should_end = true;
+		} else if (signo == SIGWINCH) {
+			endwin();
+			plot->win = initscr();
+			werase(plot->win);
+			wrefresh(plot->win);
+			plot_update_size(plot, false);
+			redraw = true;
+		}
+	}
+	*a->redraw = redraw;
+	return 0;
+}
+
+static int stdinfd_handler(int fd, void *arg)
+{
+	struct redraw_arg *a = arg;
+	bool redraw = false;
+	struct plot *plot = a->plot;
+
+	memset(stdin_buffer, 0, sizeof(stdin_buffer));
+	ssize_t cnt = read(fd, stdin_buffer, sizeof(stdin_buffer));
+	if (cnt > 0) {
+		redraw = true;
+	}
+	update_data_and_check_interval(plot);
+	*a->redraw = redraw;
+	return 0;
+}
+
 int main(int argc, char *argv[])
 {
 	int err = 0;
-	int maxfd = 0;
-	int freshtimerfd, keyfd, stdinfd, tmoutfd;
+	int freshtimerfd, keyfd, stdinfd, tmout_exit_fd;
 	int sigpipe[2];
-	fd_set readfds;
-	char stdin_buffer[4096] = { 0 };
+	bool redraw = false;
+	struct redraw_arg redraw_arg;
 
 	err = argp_parse(&argp, argc, argv, 0, NULL, NULL);
 	if (err) {
@@ -335,6 +509,8 @@ int main(int argc, char *argv[])
 			strerror(-err));
 		return err;
 	}
+
+	epollfd = epoll_create(1);
 
 	keyboard_init(&keyboard);
 	err = plot_init(&plot, &keyboard, file, verbose, x_type,
@@ -357,9 +533,11 @@ int main(int argc, char *argv[])
 	sig_rd_fd = sigpipe[0];
 	sig_wr_fd = sigpipe[1];
 
-	tmoutfd = freshtimerfd = keyfd = stdinfd = -1;
+	tmout_exit_fd = freshtimerfd = keyfd = stdinfd = -1;
 
-	FD_ZERO(&readfds);
+	redraw_arg.redraw = &redraw;
+	redraw_arg.should_end = false;
+	redraw_arg.plot = &plot;
 
 	/**
 	 * If stdin is redirected, open the terminal for key press.
@@ -392,14 +570,12 @@ int main(int argc, char *argv[])
 	} else
 		keyfd = STDIN_FILENO;
 
-	FD_SET(keyfd, &readfds);
-	if (maxfd < keyfd)
-		maxfd = keyfd;
+	epoll_add_fd(keyfd);
+	register_fd(keyfd, key_handler, &redraw_arg);
 
 	if (stdinfd != -1) {
-		FD_SET(stdinfd, &readfds);
-		if (maxfd < stdinfd)
-			maxfd = stdinfd;
+		epoll_add_fd(stdinfd);
+		register_fd(stdinfd, stdinfd_handler, &redraw_arg);
 	} else {
 		/**
 		 * Note: When we read data from stdin, we no longer need this
@@ -409,21 +585,18 @@ int main(int argc, char *argv[])
 		 * continue for stdin if plot/line information matched.
 		 */
 		freshtimerfd = new_timerfd(interval_nsecs);
-		FD_SET(freshtimerfd, &readfds);
-		if (maxfd < freshtimerfd)
-			maxfd = freshtimerfd;
+		epoll_add_fd(freshtimerfd);
+		register_fd(freshtimerfd, fresher_handler, &redraw_arg);
 	}
 
 	if (tmout_nsecs != 0) {
-		tmoutfd = new_timerfd(tmout_nsecs);
-		FD_SET(tmoutfd, &readfds);
-		if (maxfd < tmoutfd)
-			maxfd = tmoutfd;
+		tmout_exit_fd = new_timerfd(tmout_nsecs);
+		epoll_add_fd(tmout_exit_fd);
+		register_fd(tmout_exit_fd, tmout_handler, &redraw_arg);
 	}
 
-	FD_SET(sig_rd_fd, &readfds);
-	if (maxfd < sig_rd_fd)
-		maxfd = sig_rd_fd;
+	epoll_add_fd(sig_rd_fd);
+	register_fd(sig_rd_fd, sig_rd_handler, &redraw_arg);
 
 	/* curses start from here */
 
@@ -474,152 +647,19 @@ int main(int argc, char *argv[])
 	plot_redraw(&plot, verbose);
 
 	/* main loop */
-	while (!done) {
-		fd_set fds = readfds;
-		bool redraw = false;
+	struct epoll_event epollevents[16];
+	while (1) {
+		int nfds = epoll_wait(epollfd, epollevents, 16, -1);
+		for (int i = 0; i < nfds; i++) {
+			int cur_fd = epollevents[i].data.fd;
+			if (handle_fd(cur_fd) == -ENOENT)
+				continue;
+			if (redraw_arg.should_end)
+				goto end;
 
-		int ret = select(maxfd + 1, &fds, NULL, NULL, NULL);
-		if (ret > 0 && FD_ISSET(keyfd, &fds)) {
-			int count = 0;
-			/**
-			 * keyfd = open("/dev/tty")
-			 */
-			if (keyfd != STDIN_FILENO) {
-				int key = 0;
-				count = read(keyfd, &key, sizeof(key));
-				if (count > 0) {
-					/* convert to ncurses KEY */
-					switch (key) {
-					case 0x444f1b:
-					case 0x445b1b:
-						key = KEY_LEFT;
-						break;
-					case 0x434f1b:
-					case 0x435b1b:
-						key = KEY_RIGHT;
-						break;
-					case 0x424f1b:
-					case 0x425b1b:
-						key = KEY_DOWN;
-						break;
-					case 0x414f1b:
-					case 0x415b1b:
-						key = KEY_UP;
-						break;
-					default:
-						/* Handle more here */
-						break;
-					}
-					plot.kb->current_key = key;
-				} else {
-					plot.kb->current_key = ERR;
-				}
-			/**
-			 * keyfd = STDIN_FILENO
-			 */
-			} else {
-				/* need keypad() and nodelay() */
-				plot.kb->current_key = wgetch(plot.win);
-				count = 1;
+			if (redraw) {
+				plot_redraw(&plot, verbose);
 			}
-
-			if (plot.kb->current_key != ERR) {
-				plot.kb->cnt.total += count;
-				switch (plot.kb->current_key) {
-				case KEY_LEFT:
-					plot.kb->cnt.left++;
-					redraw = true;
-					break;
-				case KEY_RIGHT:
-					plot.kb->cnt.right++;
-					redraw = true;
-					break;
-				case KEY_UP:
-					plot.kb->cnt.up++;
-					redraw = true;
-					break;
-				case KEY_DOWN:
-					plot.kb->cnt.down++;
-					redraw = true;
-					break;
-				case 'q': /* quit */
-					broadcast_sig(SIGINT);
-					goto end;
-					break;
-				case 'v': /* verbose mode switch */
-					plot.kb->cnt.v++;
-					redraw = true;
-					verbose = !verbose;
-					break;
-				case 'r': /* reset plot */
-					plot.kb->cnt.r++;
-					redraw = true;
-					break;
-				case 't': /* select numerical scaling type */
-					plot.kb->cnt.t++;
-					redraw = true;
-					break;
-				case 'h': /* help */
-					plot.kb->cnt.h++;
-					redraw = true;
-					break;
-				case 'l': /* list line labels */
-					plot.kb->cnt.l++;
-					redraw = true;
-					break;
-				/**
-				 * Sometimes, the arrow keys can accidentally
-				 * trigger Esc, which causes the program to
-				 * exit, so plotcake should ignore the Esc key
-				 * like the 'top' command.
-				 */
-				case 27: /* Esc, 0x1B, 033, ^[ */
-				case 13: /* enter */
-					plot.kb->cnt.enter++;
-					redraw = true;
-					break;
-				}
-			}
-		} else if (ret > 0 && FD_ISSET(freshtimerfd, &fds)) {
-			uint64_t exp;
-			read(freshtimerfd, &exp, sizeof(exp));
-			redraw = true;
-			update_data_and_check_interval(&plot);
-		} else if (ret > 0 && FD_ISSET(tmoutfd, &fds)) {
-			uint64_t exp;
-			read(tmoutfd, &exp, sizeof(exp));
-			broadcast_sig(SIGINT);
-			goto end;
-		} else if (ret > 0 && FD_ISSET(sig_rd_fd, &fds)) {
-			unsigned char signo;
-			const ssize_t cnt = read(sig_rd_fd, &signo, 1);
-			if (cnt > 0) {
-				if (signo == SIGINT) {
-					done = true;
-					break;
-				} else if (signo == SIGWINCH) {
-					endwin();
-					plot.win = initscr();
-					werase(plot.win);
-					wrefresh(plot.win);
-					plot_update_size(&plot, false);
-					redraw = true;
-				}
-			}
-		} else if (ret > 0 && stdinfd != -1 &&
-			   FD_ISSET(stdinfd, &fds)) {
-			memset(stdin_buffer, 0, sizeof(stdin_buffer));
-			ssize_t cnt = read(stdinfd, stdin_buffer,
-					   sizeof(stdin_buffer));
-			if (cnt > 0) {
-				redraw = true;
-			}
-			update_data_and_check_interval(&plot);
-		} else
-			continue;
-
-		if (redraw) {
-			plot_redraw(&plot, verbose);
 		}
 	}
 
@@ -628,8 +668,8 @@ end:
 		close(stdinfd);
 	if (freshtimerfd != -1)
 		close(freshtimerfd);
-	if (tmoutfd != -1)
-		close(tmoutfd);
+	if (tmout_exit_fd != -1)
+		close(tmout_exit_fd);
 	if (keyfd != STDIN_FILENO && keyfd != -1)
 		close(keyfd);
 	close(sig_rd_fd);
@@ -648,5 +688,6 @@ end:
 	save_plot(&plot, output_file_prefix, verbose);
 	if (output_file_prefix)
 		free(output_file_prefix);
+	plot_destroy(&plot);
 	return 0;
 }

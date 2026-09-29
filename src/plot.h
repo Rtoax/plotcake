@@ -10,6 +10,7 @@
 #include "keyboard.h"
 #include "line.h"
 #include "utils.h"
+#include "dialog.h"
 
 /**
  * Scaling plotting values, different from @plotscaling.
@@ -68,14 +69,6 @@ struct plot {
 	struct keyboard *kb;
 
 	/**
-	 * Some information needs to be displayed for a longer time, so we set
-	 * a timeout.
-	 */
-	struct {
-		unsigned long help, llabel, shift;
-	} expired_usec;
-
-	/**
 	 * When something happens internally, such as a change in the drawing
 	 * boundary, we need to redraw, rather than letting external conditions
 	 * trigger a redraw.
@@ -95,13 +88,7 @@ struct plot {
 		x_axis_type_str(p->x_type), p->x_type
 
 	WINDOW *win; /* equal to stdscr */
-	/**
-	 * Windows and panels
-	 */
-	struct {
-		WINDOW *win;
-		PANEL *panel;
-	} help, llabels;
+	struct dialog help, llabels;
 };
 
 #define for_each_lgroup(plt, iter)                                       \
@@ -172,6 +159,7 @@ static inline void set_plot_ylabel(struct plot *p, const char *label)
 
 int plot_init(struct plot *p, struct keyboard *kb, const char *file, bool debug,
 	      enum x_axis_type x_type, enum ltype_enum axis);
+int plot_destroy(struct plot *p);
 unsigned long plot_mem_size(const struct plot *p);
 
 #define plot_warning(p, fmt...) __plot_warning(p, fmt)

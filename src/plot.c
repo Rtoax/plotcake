@@ -12,14 +12,15 @@
 #include "plot.h"
 #include "keyboard.h"
 #include "utils.h"
+#include "dialog.h"
+#include "plotcake.h"
+#include "fd-handler.h"
 
 chtype colors[C_MAX] = { 0 };
 static const char *verstring = GIT_REPO " " MY_VERSION;
 
-static void __paint_help_win(struct plot *p, bool init);
-static void __del_help_win(struct plot *p);
-static void __paint_llabels_win(struct plot *p, bool init);
-static void __del_llabels_win(struct plot *p);
+static int __paint_help_win(struct plot *p, bool init);
+static int __paint_llabels_win(struct plot *p, bool init);
 
 int plot_add_lgroup(struct plot *p, struct lgroup *lg, void *lg_ops_arg)
 {
@@ -140,11 +141,43 @@ void __plot_warning(const struct plot *p, char *fmt, ...)
 	attroff(colors[C_RED] | A_BOLD);
 }
 
+static int get_plot_value_heigh(const struct plot *p, double min, double max,
+				double v)
+{
+	double span = .0f, diff = .0f;
+
+	if (max == min || max == 0.0 || max < min) {
+		diff = 0;
+		span = 1;
+	} else {
+		diff = v - min;
+		span = max - min;
+	}
+	return p->plotheight + p->bnd.top - 1 -
+	       diff * (p->plotheight - 2) / span;
+}
+
+static double get_plot_value(const struct plot *p, const struct value *v)
+{
+	double val = v->v;
+
+	if (p->curve_type == CURVE_TYPE_LOGARITHMIC)
+		val = v->log_v;
+	else if (p->curve_type == CURVE_TYPE_LOGARITHMIC10)
+		val = v->log10_v;
+	else if (p->curve_type == CURVE_TYPE_EXPONENTIAL)
+		val = v->exp_v;
+	else if (p->curve_type == CURVE_TYPE_DELTA)
+		val = delta_v(v);
+
+	return val;
+}
+
 /**
  * @start: start point of line.
  * @len: number of value to plot.
- * @max and @min is original value, if use logarithmic, convert in this
- * function.
+ * @max and @min is algorithm value, in the case of a logarithmic plot, 'max'
+ * is already a logarithmic value.
  */
 static void __paint_line(struct plot *p, const struct lgroup *lg,
 			 const struct line *ln, int start, int len, int shift,
@@ -153,25 +186,6 @@ static void __paint_line(struct plot *p, const struct lgroup *lg,
 	int iv;
 	int prev_h = -1;
 	chtype color = colors[ln->color];
-
-	switch (p->curve_type) {
-	case CURVE_TYPE_LOGARITHMIC:
-		max = signed_log_trans(max);
-		min = signed_log_trans(min);
-		break;
-	case CURVE_TYPE_LOGARITHMIC10:
-		max = signed_log10_trans(max);
-		min = signed_log10_trans(min);
-		break;
-	case CURVE_TYPE_EXPONENTIAL:
-		max = exp(max);
-		min = exp(min);
-		break;
-	case CURVE_TYPE_DELTA:
-	case CURVE_TYPE_NONE:
-	default:
-		break;
-	}
 
 	const long ln_shift_count = ln->count - shift;
 	const int nvs = (ln_shift_count + p->plotscaling - 1) / p->plotscaling;
@@ -208,36 +222,19 @@ static void __paint_line(struct plot *p, const struct lgroup *lg,
 			continue;
 		}
 
-		double span = .0f, diff = .0f;
-		double plot_v = v->v;
+		double plot_v = get_plot_value(p, v);
 
-		if (p->curve_type == CURVE_TYPE_LOGARITHMIC)
-			plot_v = v->log_v;
-		else if (p->curve_type == CURVE_TYPE_LOGARITHMIC10)
-			plot_v = v->log10_v;
-		else if (p->curve_type == CURVE_TYPE_EXPONENTIAL)
-			plot_v = v->exp_v;
-		else if (p->curve_type == CURVE_TYPE_DELTA) {
-			plot_v = delta_v(v);
-			/* touch the end of line */
-			if (isnan(plot_v)) {
-				iv = ln_shift_count;
-				goto print_llabel;
-			}
-		}
-
-		if (max == min || max == 0.0 || max < min) {
-			diff = 0;
-			span = 1;
-		} else {
-			diff = plot_v - min;
-			span = max - min;
+		/**
+		 * 1. the last value of line may be NaN, see delta_v()
+		 */
+		if (isnan(plot_v)) {
+			iv = ln_shift_count;
+			goto print_llabel;
 		}
 
 		int ivs = (iv + p->plotscaling - 1) / p->plotscaling;
 
-		int h = p->plotheight + p->bnd.top - 1 -
-			diff * (p->plotheight - 2) / span;
+		int h = get_plot_value_heigh(p, min, max, plot_v);
 		int w = p->plotwidth + p->bnd.left - (nvs - ivs);
 
 		attron(color);
@@ -410,8 +407,37 @@ static void paint_lgroup(struct plot *p, const struct lgroup *lg, bool debug)
 			_max = line_range_max(l, start, p->plotscaling, len);
 			_min = line_range_min(l, start, p->plotscaling, len);
 		}
+
+		switch (p->curve_type) {
+		case CURVE_TYPE_LOGARITHMIC:
+			_max = signed_log_trans(_max);
+			_min = signed_log_trans(_min);
+			break;
+		case CURVE_TYPE_LOGARITHMIC10:
+			_max = signed_log10_trans(_max);
+			_min = signed_log10_trans(_min);
+			break;
+		case CURVE_TYPE_EXPONENTIAL:
+			_max = exp(_max);
+			_min = exp(_min);
+			break;
+		case CURVE_TYPE_DELTA:
+		case CURVE_TYPE_NONE:
+		default:
+			break;
+		}
+
 		max = max < _max ? _max : max;
 		min = min > _min ? _min : min;
+	}
+
+	/* draw zero y line if needed */
+	if (max > 0 && min < 0) {
+		double h = get_plot_value_heigh(p, min, max, 0);
+		attron(A_DIM);
+		for (int i = 0; i < p->plotwidth - 1; i++)
+			mvwprintw(p->win, h, p->bnd.left + 1 + i, "-");
+		attroff(A_DIM);
 	}
 
 	for_each_line(lg, l)
@@ -519,12 +545,8 @@ static void __plot_redraw(struct plot *p, bool debug)
 	p->redrawcount++;
 
 	erase();
-	if (p->help.win) {
-		werase(p->help.win);
-	}
-	if (p->llabels.win) {
-		werase(p->llabels.win);
-	}
+	erase_dialog(&p->help);
+	erase_dialog(&p->llabels);
 
 	/**
 	 * Handle the keyboard first, because 'reset' need before paint.
@@ -532,25 +554,8 @@ static void __plot_redraw(struct plot *p, bool debug)
 	exec_key_handler(p->kb, p->kb->current_key);
 
 	__paint_plot(p, debug);
-
-	if (p->expired_usec.help && p->expired_usec.help > usecs()) {
-		__paint_help_win(p, false);
-	} else {
-		p->expired_usec.help = 0;
-		__del_help_win(p);
-	}
-
-	if (p->expired_usec.llabel && p->expired_usec.llabel > usecs()) {
-		__paint_llabels_win(p, false);
-	} else {
-		p->expired_usec.llabel = 0;
-		__del_llabels_win(p);
-	}
-
-	if (p->expired_usec.shift && p->expired_usec.shift < usecs()) {
-		p->plotshift = 0;
-		p->expired_usec.shift = 0;
-	}
+	__paint_help_win(p, false);
+	__paint_llabels_win(p, false);
 }
 
 void plot_redraw(struct plot *p, bool debug)
@@ -563,12 +568,8 @@ void plot_redraw(struct plot *p, bool debug)
 	}
 
 	wnoutrefresh(p->win);
-	if (p->help.win) {
-		wnoutrefresh(p->help.win);
-	}
-	if (p->llabels.win) {
-		wnoutrefresh(p->llabels.win);
-	}
+	refresh_dialog(&p->help);
+	refresh_dialog(&p->llabels);
 	doupdate();
 
 	/* do some reset */
@@ -596,18 +597,29 @@ static int max_key_help_len(void)
 	return max;
 }
 
-static void __paint_help_win(struct plot *p, bool init)
+/**
+ * @return: return 0 or 1 if success (1: create window)
+ */
+static int __paint_help_win(struct plot *p, bool init)
 {
-	int h = p->plotheight / 2 + p->bnd.top - ARRAY_SIZE(key_helps) / 2;
-	int w = p->plotwidth / 2 + p->bnd.left - max_key_help_len() / 2;
-	int n = sizeof(key_helps) / sizeof(key_helps[0]);
+	int h, w, n, ret = 0;
 	WINDOW *win = p->help.win;
+
+	/**
+	 * If no initialization flag is specified and the window is null, the
+	 * drawing process is skipped.
+	 */
+	if (!init && !win)
+		return 0;
+
+	h = p->plotheight / 2 + p->bnd.top - ARRAY_SIZE(key_helps) / 2;
+	w = p->plotwidth / 2 + p->bnd.left - max_key_help_len() / 2;
+	n = sizeof(key_helps) / sizeof(key_helps[0]);
 
 	if (init && !win) {
 		win = newwin(n + 2, max_key_help_len() + 2, h, w);
-		p->help.win = win;
-		p->help.panel = new_panel(win);
-		top_panel(p->help.panel);
+		new_dialog(&p->help, win);
+		ret = 1;
 	}
 
 	wattron(win, colors[C_BLUE] | A_BOLD);
@@ -616,26 +628,23 @@ static void __paint_help_win(struct plot *p, bool init)
 	for (int i = n - 1; i >= 0; i--)
 		mvwprintw(win, i + 1, 1, "%s", key_helps[n - i - 1]);
 	wattroff(win, colors[C_BLUE] | A_BOLD);
+
+	return ret;
 }
 
-static void __del_help_win(struct plot *p)
+static int __paint_llabels_win(struct plot *p, bool init)
 {
-	if (p->help.panel) {
-		del_panel(p->help.panel);
-		p->help.panel = NULL;
-	}
-	if (p->help.win) {
-		delwin(p->help.win);
-		p->help.win = NULL;
-	}
-}
-
-static void __paint_llabels_win(struct plot *p, bool init)
-{
-	int i, nline = 0;
+	int ret = 0, i, nline = 0;
 	int max_name_len = 0;
 	WINDOW *win = p->llabels.win;
 	const int n = 6;
+
+	/**
+	 * If no initialization flag is specified and the window is null, the
+	 * drawing process is skipped.
+	 */
+	if (!init && !win)
+		return 0;
 
 	for_each_lgroup(p, lg)
 	{
@@ -653,9 +662,8 @@ static void __paint_llabels_win(struct plot *p, bool init)
 
 	if (init && !win) {
 		win = newwin(nline + 2, max_name_len + n + 3, h, w);
-		p->llabels.win = win;
-		p->llabels.panel = new_panel(win);
-		top_panel(p->llabels.panel);
+		new_dialog(&p->llabels, win);
+		ret = 1;
 	}
 
 	wattron(win, A_BOLD);
@@ -675,18 +683,17 @@ static void __paint_llabels_win(struct plot *p, bool init)
 			i++;
 		}
 	}
+	return ret;
 }
 
-static void __del_llabels_win(struct plot *p)
+static int dialog_timeout_handler(int timerfd, void *arg)
 {
-	if (p->llabels.panel) {
-		del_panel(p->llabels.panel);
-		p->llabels.panel = NULL;
-	}
-	if (p->llabels.win) {
-		delwin(p->llabels.win);
-		p->llabels.win = NULL;
-	}
+	struct dialog *d = arg;
+	epoll_del_fd(timerfd);
+	unregister_fd(timerfd);
+	close(timerfd);
+	del_dialog(d);
+	return 0;
 }
 
 /**
@@ -695,8 +702,11 @@ static void __del_llabels_win(struct plot *p)
 static int key_h_handler(int key, void *arg)
 {
 	struct plot *p = arg;
-	p->expired_usec.help = usecs() + EXPIRED_USECS_HELP;
-	__paint_help_win(p, true);
+	if (__paint_help_win(p, true) == 1) {
+		int fd = new_timerfd(EXPIRED_USECS_HELP * 1000);
+		epoll_add_fd(fd);
+		register_fd(fd, dialog_timeout_handler, &p->help);
+	}
 	return 0;
 }
 
@@ -706,8 +716,11 @@ static int key_h_handler(int key, void *arg)
 static int key_l_handler(int key, void *arg)
 {
 	struct plot *p = arg;
-	p->expired_usec.llabel = usecs() + EXPIRED_USECS_LLABEL;
-	__paint_llabels_win(p, true);
+	if (__paint_llabels_win(p, true) == 1) {
+		int fd = new_timerfd(EXPIRED_USECS_LLABEL * 1000);
+		epoll_add_fd(fd);
+		register_fd(fd, dialog_timeout_handler, &p->llabels);
+	}
 	return 0;
 }
 
@@ -719,9 +732,6 @@ static int key_r_handler(int key, void *arg)
 	struct plot *p = arg;
 
 	plot_scaling_init(p);
-	p->expired_usec.help = 0;
-	p->expired_usec.llabel = 0;
-	p->expired_usec.shift = 0;
 	p->plotshift = 0;
 	return 0;
 }
@@ -748,21 +758,42 @@ static int key_down_handler(int key, void *arg)
 	return 0;
 }
 
+static int plot_shift_timerfd = -1;
+
+static int plot_shift_timeout(int timerfd, void *arg)
+{
+	struct plot *p = arg;
+	p->plotshift = 0;
+	plot_shift_timerfd = -1;
+	epoll_del_fd(timerfd);
+	unregister_fd(timerfd);
+	close(timerfd);
+	return 0;
+}
+
+static int create_shift_timerfd(struct plot *p)
+{
+	if (plot_shift_timerfd == -1) {
+		plot_shift_timerfd = new_timerfd(EXPIRED_USECS_SHIFT * 1000);
+		epoll_add_fd(plot_shift_timerfd);
+		register_fd(plot_shift_timerfd, plot_shift_timeout, p);
+	}
+	return 0;
+}
+
 static int key_left_handler(int key, void *arg)
 {
 	struct plot *p = arg;
-	/* 10 seconds */
-	p->expired_usec.shift = usecs() + EXPIRED_USECS_SHIFT;
 	plot_shift_left(p);
+	create_shift_timerfd(p);
 	return 0;
 }
 
 static int key_right_handler(int key, void *arg)
 {
 	struct plot *p = arg;
-	/* 10 seconds */
-	p->expired_usec.shift = usecs() + EXPIRED_USECS_SHIFT;
 	plot_shift_right(p);
+	create_shift_timerfd(p);
 	return 0;
 }
 
@@ -797,6 +828,11 @@ int plot_init(struct plot *p, struct keyboard *kb, const char *file, bool debug,
 		err = err ?: load_plot(p, file, debug);
 
 	return err;
+}
+
+int plot_destroy(struct plot *p)
+{
+	return 0;
 }
 
 /* Get memory bytes that plot already spent */
