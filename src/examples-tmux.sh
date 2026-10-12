@@ -115,6 +115,8 @@ check_content "left=0"
 check_content "right=0"
 check_content "up=0"
 check_content "down=0"
+check_content "scale 1"
+check_content "shft 0\/0"
 check_content "$(hostname)"
 check_content "1: ${line0}"
 check_content "2: ${line1}"
@@ -128,10 +130,12 @@ send_keys Up
 send_keys Up
 send_keys Up
 check_content "left=0,right=0,up=3,down=0"
+check_content "scale 4"
 send_keys Down
 send_keys Down
 send_keys Down
 check_content "left=0,right=0,up=3,down=3"
+check_content "scale 1"
 send_keys Left
 send_keys Left
 send_keys Left
@@ -160,17 +164,23 @@ send_keys Enter
 
 send_keys 't'
 check_content "${title} \(signed logarithmic\)"
+check_content "s\*log\(1\+"
 send_keys 't'
 check_content "${title} \(base-10 signed logarithmic\)"
+check_content "s\*log10\(1\+"
 send_keys 't'
 check_content "${title} \(base-e exponential\)"
+check_content "exp\("
 send_keys 't'
 check_content "${title} \(delta\)"
+check_content "delta\("
 send_keys 't'
-send_keys 't'
+send_keys 't' # Back to origin plot type
 
 send_keys 'v'
 check_content "h=2"
 check_content "l=2"
 check_content "t=6"
+
 tmux capture-pane -t ${session} -p
+echo "SUCCESS"
