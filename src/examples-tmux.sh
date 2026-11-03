@@ -19,6 +19,8 @@ session=$(mktemp -u plotcake-XXXXXX)
 width=120
 heigh=40
 
+. tools/lib-plotcake.sh
+
 cleanup()
 {
 	local err=$?
@@ -81,7 +83,7 @@ for ((i = 1; i <= 10000; i++))
 do
 	seq --separator=' ' \$i 20 \$((i + 2 * 20))
 	sleep 0.05
-done | ./plotcake --title "${title}" \\
+done | ${PLOTCAKE} --title "${title}" \\
 	--xlabel "${xlabel}" \\
 	--ylabel "${ylabel}" \\
 	--axis-curve-type utf8 \\
@@ -116,7 +118,7 @@ check_content "right=0"
 check_content "up=0"
 check_content "down=0"
 check_content "scale 1"
-check_content "shft 0\/0"
+check_content "shft 0/0"
 check_content "$(hostname)"
 check_content "1: ${line0}"
 check_content "2: ${line1}"
