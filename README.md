@@ -87,3 +87,8 @@ $ while sleep .2; do \
                                                  Thu May 28 10:23:24 2026
                                         github.com/rtoax/plotcake v1.1.0
 ```
+
+
+# Development
+
+Sync from [test-linux](https://github.com/Rtoax/test-linux)'s [ncurses/tools](https://github.com/Rtoax/test-linux/tree/main/tools/ncurses/tools).

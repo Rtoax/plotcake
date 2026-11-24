@@ -5,4 +5,4 @@ codebase.
 
 ## Project overview
 
-ncurses-tools.
+plotcake.
