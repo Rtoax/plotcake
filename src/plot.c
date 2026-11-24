@@ -114,6 +114,7 @@ void plot_update_size(struct plot *p, bool init)
 	 */
 	switch (p->kb->current_key) {
 	case 'r':
+	case 's':
 	case 't':
 		p->bnd.top = p->bnd_prev_max.top;
 		p->bnd.bottom = p->bnd_prev_max.bottom;
@@ -167,10 +168,24 @@ static double get_plot_value(const struct plot *p, const struct value *v)
 		val = v->log10_v;
 	else if (p->curve_type == CURVE_TYPE_EXPONENTIAL)
 		val = v->exp_v;
-	else if (p->curve_type == CURVE_TYPE_DELTA)
+	else if (p->curve_type == CURVE_TYPE_DELTA &&
+		 !p->enable_stacked_line_chart)
 		val = delta_v(v);
 
 	return val;
+}
+
+static int paint_y0_line(const struct plot *p, double min, double max)
+{
+	if (min > 0 || max < 0) {
+		return 0;
+	}
+	double h = get_plot_value_heigh(p, min, max, 0);
+	attron(A_DIM);
+	for (int i = 0; i < p->plotwidth - 1; i++)
+		mvwprintw(p->win, h, p->bnd.left + 1 + i, "-");
+	attroff(A_DIM);
+	return 0;
 }
 
 /**
@@ -181,7 +196,8 @@ static double get_plot_value(const struct plot *p, const struct value *v)
  */
 static void __paint_line(struct plot *p, const struct lgroup *lg,
 			 const struct line *ln, int start, int len, int shift,
-			 double max, double min)
+			 double max, double min, double *stacked_line,
+			 bool first_line)
 {
 	int iv;
 	int prev_h = -1;
@@ -222,16 +238,30 @@ static void __paint_line(struct plot *p, const struct lgroup *lg,
 			continue;
 		}
 
-		double plot_v = get_plot_value(p, v);
+		double real_v = get_plot_value(p, v);
 
 		/**
 		 * 1. the last value of line may be NaN, see delta_v()
 		 */
-		if (isnan(plot_v)) {
+		if (isnan(real_v)) {
 			iv = ln_shift_count;
 			goto print_llabel;
 		}
 
+		if (stacked_line) {
+			if (first_line) {
+				stacked_line[iv] = real_v;
+			} else {
+				stacked_line[iv] += real_v;
+			}
+		}
+
+		double plot_v;
+		if (stacked_line) {
+			plot_v = stacked_line[iv];
+		} else {
+			plot_v = real_v;
+		}
 		int ivs = (iv + p->plotscaling - 1) / p->plotscaling;
 
 		int h = get_plot_value_heigh(p, min, max, plot_v);
@@ -283,22 +313,29 @@ static void __paint_line(struct plot *p, const struct lgroup *lg,
 		}
 
 		/* set y axis */
-		char sv[64];
+		char sv[128];
 		int nc;
+		int sz = sizeof(sv);
 
 		if (p->curve_type == CURVE_TYPE_LOGARITHMIC)
-			nc = snprintf(sv, 64, "s*log(1+|%.3f|)=%.3f", v->v,
-				      plot_v);
+			nc = snprintf(sv, sz, "s*log(1+|%.3f|)=%.3f", v->v,
+				      real_v);
 		else if (p->curve_type == CURVE_TYPE_LOGARITHMIC10)
-			nc = snprintf(sv, 64, "s*log10(1+|%.3f|)=%.3f", v->v,
-				      plot_v);
+			nc = snprintf(sv, sz, "s*log10(1+|%.3f|)=%.3f", v->v,
+				      real_v);
 		else if (p->curve_type == CURVE_TYPE_EXPONENTIAL)
-			nc = snprintf(sv, 64, "exp(%.3f)=%.3f", v->v, plot_v);
-		else if (p->curve_type == CURVE_TYPE_DELTA)
-			nc = snprintf(sv, 64, "delta(%.3f-%.3f)=%.3f",
-				      v->next->v, v->v, plot_v);
+			nc = snprintf(sv, sz, "exp(%.3f)=%.3f", v->v, real_v);
+		else if (p->curve_type == CURVE_TYPE_DELTA &&
+			 !p->enable_stacked_line_chart)
+			nc = snprintf(sv, sz, "delta(%.3f-%.3f)=%.3f",
+				      v->next->v, v->v, real_v);
 		else
-			nc = snprintf(sv, 64, "%.3f", plot_v);
+			nc = snprintf(sv, sz, "%.3f", real_v);
+
+		if (p->enable_stacked_line_chart && plot_v != real_v) {
+			nc += snprintf(sv + strlen(sv), sz - strlen(sv),
+				       "[%.3f]", plot_v);
+		}
 
 		if (p->bnd_prev_max.left < nc)
 			p->bnd_prev_max.left = nc;
@@ -336,12 +373,19 @@ static void __draw_title(const struct plot *p)
 			 p->title);
 	else if (p->curve_type == CURVE_TYPE_EXPONENTIAL)
 		snprintf(buf, sizeof(buf), "%s (base-e exponential)", p->title);
-	else if (p->curve_type == CURVE_TYPE_DELTA)
+	else if (p->curve_type == CURVE_TYPE_DELTA &&
+		 !p->enable_stacked_line_chart)
 		snprintf(buf, sizeof(buf), "%s (delta)", p->title);
 	else
 		snprintf(buf, sizeof(buf), "%s", p->title);
 
+	if (p->enable_stacked_line_chart) {
+		strncat(buf, "[stacked]", sizeof(buf) - strlen(buf) - 1);
+	}
+
+	wattron(p->win, colors[C_BLUE] | A_BOLD);
 	mvaddstr(0, (p->width - strlen(buf)) / 2, buf);
+	wattroff(p->win, colors[C_BLUE] | A_BOLD);
 
 	if (p->debug) {
 		char buf2[64];
@@ -370,10 +414,15 @@ static void __draw_axes(const struct plot *p)
 
 static void paint_lgroup(struct plot *p, const struct lgroup *lg)
 {
-	double max = -DBL_MAX, min = DBL_MAX;
+	double max, min, max_stacked, min_stacked;
 	int start = -1;
 	int len = p->plotwidth * p->plotscaling;
 	unsigned long shift = plot_shift(p);
+	bool first_line = true;
+	unsigned long max_nr_values = 0;
+
+	max = max_stacked = -DBL_MAX;
+	min = min_stacked = DBL_MAX;
 
 	/**
 	 * Since we are not drawing all the data for the entire curve, we need
@@ -384,6 +433,9 @@ static void paint_lgroup(struct plot *p, const struct lgroup *lg)
 	{
 		if (l->count <= 0)
 			continue;
+
+		if (max_nr_values < l->count)
+			max_nr_values = l->count;
 
 		/**
 		 * If the amount of data is insufficient to fill a screen, then
@@ -398,7 +450,8 @@ static void paint_lgroup(struct plot *p, const struct lgroup *lg)
 		start = l->count - len - shift;
 
 		double _max, _min;
-		if (p->curve_type == CURVE_TYPE_DELTA) {
+		if (p->curve_type == CURVE_TYPE_DELTA &&
+		    !p->enable_stacked_line_chart) {
 			_max = line_range_delta_max(l, start, p->plotscaling,
 						    len);
 			_min = line_range_delta_min(l, start, p->plotscaling,
@@ -427,24 +480,54 @@ static void paint_lgroup(struct plot *p, const struct lgroup *lg)
 			break;
 		}
 
+		if (p->enable_stacked_line_chart) {
+			if (first_line) {
+				max_stacked = _max;
+				min_stacked = _min;
+				first_line = false;
+			} else {
+				max_stacked += _max;
+				if (min_stacked > min_stacked + _min) {
+					min_stacked += _min;
+				}
+			}
+		}
+
 		max = max < _max ? _max : max;
 		min = min > _min ? _min : min;
 	}
 
 	/* draw zero y line if needed */
-	if (max > 0 && min < 0) {
-		double h = get_plot_value_heigh(p, min, max, 0);
-		attron(A_DIM);
-		for (int i = 0; i < p->plotwidth - 1; i++)
-			mvwprintw(p->win, h, p->bnd.left + 1 + i, "-");
-		attroff(A_DIM);
+	if (p->enable_stacked_line_chart) {
+		paint_y0_line(p, min_stacked, max_stacked);
+	} else {
+		paint_y0_line(p, min, max);
+	}
+
+	double *stacked_line = NULL;
+	if (p->enable_stacked_line_chart) {
+		size_t sz = max_nr_values * sizeof(double);
+		stacked_line = (double *)malloc(sz);
+		memset(stacked_line, 0x0, sz);
+	}
+
+	if (p->enable_stacked_line_chart) {
+		first_line = true;
 	}
 
 	for_each_line(lg, l)
 	{
 		if (l->count <= 0)
 			continue;
-		__paint_line(p, lg, l, start, len, shift, max, min);
+		__paint_line(p, lg, l, start, len, shift,
+			     p->enable_stacked_line_chart ? max_stacked : max,
+			     p->enable_stacked_line_chart ? min_stacked : min,
+			     stacked_line, first_line);
+		first_line = false;
+	}
+
+	if (p->enable_stacked_line_chart) {
+		free(stacked_line);
 	}
 
 	if (p->debug && lg->ops && lg->ops->plot_debug)
@@ -572,6 +655,12 @@ static void __plot_redraw(struct plot *p)
 	__paint_llabels_win(p, false);
 }
 
+static void __redraw_id_fn(const struct id_handler *id, void *arg)
+{
+	struct dialog *_d = id->arg;
+	refresh_dialog(_d);
+}
+
 void plot_redraw(struct plot *p)
 {
 	__plot_redraw(p);
@@ -583,12 +672,7 @@ void plot_redraw(struct plot *p)
 
 	wnoutrefresh(p->win);
 
-	void fn(const struct id_handler *id, void *arg)
-	{
-		struct dialog *_d = id->arg;
-		refresh_dialog(_d);
-	}
-	for_each_id(p->start_time_to_dialog, fn, NULL);
+	for_each_id(p->start_time_to_dialog, __redraw_id_fn, NULL);
 
 	doupdate();
 
@@ -598,9 +682,10 @@ void plot_redraw(struct plot *p)
 }
 
 static const char *key_helps[] = {
-	KEY_HELP_h,    KEY_HELP_l,     KEY_HELP_q,     KEY_HELP_r,
-	KEY_HELP_t,    KEY_HELP_v,     KEY_HELP_UP,    KEY_HELP_DOWN,
-	KEY_HELP_LEFT, KEY_HELP_RIGHT, KEY_HELP_ENTER,
+	KEY_HELP_h,	KEY_HELP_l,    KEY_HELP_q,    KEY_HELP_r,
+	KEY_HELP_s,	KEY_HELP_t,    KEY_HELP_v,    KEY_HELP_x,
+	KEY_HELP_UP,	KEY_HELP_DOWN, KEY_HELP_LEFT, KEY_HELP_RIGHT,
+	KEY_HELP_ENTER,
 };
 
 static int max_key_help_len(void)
@@ -836,12 +921,32 @@ static int key_r_handler(int key, void *arg)
 }
 
 /**
+ * Press key 's', enable/disable stacked line chart
+ */
+static int key_s_handler(int key, void *arg)
+{
+	struct plot *p = arg;
+	p->enable_stacked_line_chart = !p->enable_stacked_line_chart;
+	return 0;
+}
+
+/**
  * Press key 't', change curve type
  */
 static int key_t_handler(int key, void *arg)
 {
 	struct plot *p = arg;
 	p->curve_type = (p->curve_type + 1) % CURVE_TYPE_MAX;
+	return 0;
+}
+
+/**
+ * Press key 'x', change x axis type
+ */
+static int key_x_handler(int key, void *arg)
+{
+	struct plot *p = arg;
+	p->x_type = (p->x_type + 1) % X_AXIS_TYPE_MAX;
 	return 0;
 }
 
@@ -920,9 +1025,11 @@ int plot_init(struct plot *p, struct keyboard *kb, const char *file, bool debug,
 	p->llabels_timerfd = -1;
 
 	err = err ?: register_key_handler(kb, 'r', p, key_r_handler);
+	err = err ?: register_key_handler(kb, 's', p, key_s_handler);
 	err = err ?: register_key_handler(kb, 't', p, key_t_handler);
 	err = err ?: register_key_handler(kb, 'h', p, key_h_handler);
 	err = err ?: register_key_handler(kb, 'l', p, key_l_handler);
+	err = err ?: register_key_handler(kb, 'x', p, key_x_handler);
 	err = err ?: register_key_handler(kb, KEY_UP, p, key_up_handler);
 	err = err ?: register_key_handler(kb, KEY_DOWN, p, key_down_handler);
 	err = err ?: register_key_handler(kb, KEY_RIGHT, p, key_right_handler);

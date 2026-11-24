@@ -54,6 +54,7 @@ enum {
 	ARG_AXIS_CURVE_TYPE,
 	ARG_WIN_BORDER_TYPE,
 	ARG_STDIN_BUFFER_BYTES,
+	ARG_ENABLE_STACKED_LINE_CHART,
 };
 
 const char argp_prog_doc[] = ANSI_BOLD
@@ -74,7 +75,7 @@ const char argp_prog_doc[] = ANSI_BOLD
 	"   " ANSI_GRAY "# Draw one line\n" ANSI_RST ANSI_GREEN
 	"   $ seq 1 1 10 | plotcake\n" ANSI_RST "   " ANSI_GRAY
 	"# Draw ten line\n" ANSI_RST ANSI_GREEN
-	"   $ seq -s=' ' 1 1 10 | plotcake\n" ANSI_RST "\n"
+	"   $ seq -s ' ' 1 1 10 | plotcake\n" ANSI_RST "\n"
 	"   " ANSI_GRAY "# Work with tmux\n" ANSI_RST ANSI_GREEN
 	"   $ tmux new-session -d -s plotcake plotcake [options]\n"
 	"   $ tmux attach-session -t plotcake\n"
@@ -85,8 +86,10 @@ const char argp_prog_doc[] = ANSI_BOLD
 	"   " KEY_HELP_l "\n"
 	"   " KEY_HELP_q "\n"
 	"   " KEY_HELP_r "\n"
+	"   " KEY_HELP_s "\n"
 	"   " KEY_HELP_t "\n"
 	"   " KEY_HELP_v "\n"
+	"   " KEY_HELP_x "\n"
 	"   " KEY_HELP_ENTER "\n"
 	"   " KEY_HELP_UP "\n"
 	"   " KEY_HELP_DOWN "\n"
@@ -104,14 +107,14 @@ static const struct argp_option opts[] = {
 	  "Specify line types, if an invalid value is entered, the supported "
 	  "line types will be listed or use --ltypes show all types supported "
 	  "(may be listed multiple times)" },
-	{ "ltypes", ARG_LINE_TYPES, NULL, 1, "show line types for --ltype" },
+	{ "ltypes", ARG_LINE_TYPES, NULL, 1, "Show line types for --ltype" },
 	{ "lcolor", 'C', "COLOR", 0,
 	  "Specify line colors, if an invalid value is entered, the supported "
 	  "line colors will be listed, can match color prefixes, such as 'r' "
 	  "matching 'red' (may be listed multiple times)" },
 	{ "lcolors", ARG_LINE_COLORS, NULL, 1,
-	  "show line colors for --lcolor" },
-	{ "ram", 'M', NULL, 1, "Display memory instead of loadavg" },
+	  "Show line colors for --lcolor" },
+	{ "ram", 'M', NULL, 1, "Display memory curves instead of loadavg" },
 	{ "interval", 'I', "TIME", 0,
 	  "Specify interval time, the default unit is nanoseconds, but units "
 	  "such as 'min', 's', 'ms', 'us', and 'ns' can also be used. If data "
@@ -125,7 +128,8 @@ static const struct argp_option opts[] = {
 	{ "exponential", ARG_EXPONENTIAL, NULL, 1,
 	  "Use base-e exponential (shortcut " KEY_HELP_t ")" },
 	{ "delta", ARG_DELTA, NULL, 1,
-	  "Use delta value (shortcut " KEY_HELP_t ")" },
+	  "Use delta value (shortcut " KEY_HELP_t "), if a stacked line chart "
+	  "is plotted, the 'delta' plot type will revert to the raw data." },
 	{ "tmout", 't', "TIME", 0,
 	  "Specify timeout time, the default unit is nanoseconds, but units "
 	  "such as 'min', 's', 'ms', 'us', and 'ns' can also be used." },
@@ -139,10 +143,16 @@ static const struct argp_option opts[] = {
 #endif
 	  ")." },
 	{ "x-index", ARG_X_AXIS_INDEX, NULL, 1,
-	  "Use index as x axis value instead of timeval" },
+	  "Use index as x axis value instead of timeval (shortcut: " KEY_HELP_x
+	  ")." },
 	{ "axis-curve-type", ARG_AXIS_CURVE_TYPE, "TYPE", 0,
 	  "Plotting line types for coordinate axes, the supported types will "
 	  "be listed or use --ltypes show all types supported " },
+	{ "enable-stacked-line-chart", ARG_ENABLE_STACKED_LINE_CHART, NULL, 1,
+	  "Create a stacked line chart; this type of chart layers multiple "
+	  "data series on top of one another, illustrating both the \"overall "
+	  "trend\" and the \"contribution of each individual series\" "
+	  "(shortcut " KEY_HELP_s ")." },
 	{ "win-border", ARG_WIN_BORDER_TYPE, "[utf8]", 0,
 	  "Sets the border type for the pop-up window; currently, only 'utf8'"
 	  " and 'auto' are supported." },
@@ -166,6 +176,7 @@ static char *title = NULL;
 static char *xlabel = NULL;
 static char *ylabel = NULL;
 static enum curve_type curve_type = CURVE_TYPE_NONE;
+static bool enable_stacked_line_chart = false;
 static enum x_axis_type x_type = X_TIMEVAL;
 static enum ltype_enum axis_curve_type = LINE_TYPE_THIN_UNICODE;
 static enum win_border_type win_border_type = WIN_BORDER_TYPE_DEFAULT;
@@ -254,6 +265,9 @@ static error_t parse_arg(int opt, char *arg, struct argp_state *state)
 		break;
 	case ARG_DELTA:
 		curve_type = CURVE_TYPE_DELTA;
+		break;
+	case ARG_ENABLE_STACKED_LINE_CHART:
+		enable_stacked_line_chart = true;
 		break;
 	case ARG_LINE_TYPES:
 		ltype_print_names(stdout);
@@ -454,6 +468,11 @@ static int key_handler(long fd, void *arg)
 			plot->kb->cnt.r++;
 			a->redraw = true;
 			break;
+		/* enable/disable stacked line chart */
+		case 's':
+			plot->kb->cnt.s++;
+			a->redraw = true;
+			break;
 		/* select numerical scaling type */
 		case 't':
 			plot->kb->cnt.t++;
@@ -465,6 +484,11 @@ static int key_handler(long fd, void *arg)
 			break;
 		case 'l': /* list line labels */
 			plot->kb->cnt.l++;
+			a->redraw = true;
+			break;
+		/* x axis type */
+		case 'x':
+			plot->kb->cnt.x++;
 			a->redraw = true;
 			break;
 		/**
@@ -642,6 +666,7 @@ int main(int argc, char *argv[])
 	init_flavor();
 
 	plot.curve_type = curve_type;
+	plot.enable_stacked_line_chart = enable_stacked_line_chart;
 
 	if (stdinfd == -1) {
 		if (!file && ram) {
