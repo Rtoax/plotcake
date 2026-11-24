@@ -3,8 +3,9 @@ plotcake
 
 # Usage Example
 
-- [Example1](https://github.com/ncurses-tools/assets/5e74a129-b045-4b9a-a993-cb1fac4a1ef8)
-- [Example2](https://www.youtube.com/watch?v=WPLqUykHtaQ)
+[Examples](https://github.com/ncurses-tools/assets/5e74a129-b045-4b9a-a993-cb1fac4a1ef8)
+
+- [YouTube Example](https://www.youtube.com/watch?v=WPLqUykHtaQ)
 
 ## Help
 
