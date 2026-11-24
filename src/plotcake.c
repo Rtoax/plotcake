@@ -663,7 +663,7 @@ int main(int argc, char *argv[])
 	keypad(plot.win, TRUE);
 	nodelay(plot.win, TRUE);
 
-	init_flavor();
+	init_flavor(true);
 
 	plot.curve_type = curve_type;
 	plot.enable_stacked_line_chart = enable_stacked_line_chart;
@@ -671,12 +671,10 @@ int main(int argc, char *argv[])
 	if (stdinfd == -1) {
 		if (!file && ram) {
 			set_plot_title(&plot, title ?: "Memory Usage");
-			set_plot_xlabel(&plot, xlabel ?: "Time");
 			set_plot_ylabel(&plot, ylabel ?: "Size(GiB)");
 			plot_add_lgroup(&plot, &lg_ram, NULL);
 		} else if (!file) {
 			set_plot_title(&plot, title ?: "Loadavg");
-			set_plot_xlabel(&plot, xlabel ?: "Time");
 			set_plot_ylabel(&plot, ylabel ?: "Load");
 			plot_add_lgroup(&plot, &lg_loadavg, NULL);
 		}
@@ -686,9 +684,11 @@ int main(int argc, char *argv[])
 			.line_buff = stdin_buffer,
 		};
 		set_plot_title(&plot, title ?: "stdin");
-		set_plot_xlabel(&plot, xlabel ?: "Time");
 		set_plot_ylabel(&plot, ylabel ?: "Value");
 		plot_add_lgroup(&plot, &lg_stdin, &stdarg);
+	}
+	if (xlabel) {
+		set_plot_xlabel(&plot, xlabel);
 	}
 
 	/* Read from 'file' instead of line group */

@@ -52,11 +52,16 @@ struct lgroup *plot_lgroup(const struct plot *p, int idx)
 	return NULL;
 }
 
-void init_flavor(void)
+void init_flavor(bool transparent_bg)
 {
 	if (has_colors()) {
 		int bg = COLOR_BLACK;
 		start_color();
+
+		if (transparent_bg) {
+			use_default_colors();
+			bg = -1;
+		}
 #define SET_COLOR(num, fg)                        \
 	init_pair(num + 1, (short)fg, (short)bg); \
 	colors[num] |= (chtype)COLOR_PAIR(num + 1)
@@ -408,8 +413,13 @@ static void __draw_axes(const struct plot *p)
 
 	/* x/y axis labels */
 	mvaddstr(p->bnd.top - 1, p->bnd.left, p->label_y);
+	/**
+	 * If an x-axis label is set, display it directly; otherwise, adjust the
+	 * x-axis label based on the type.
+	 */
 	mvaddstr(p->plotheight + p->bnd.top + 1, p->plotwidth + p->bnd.left,
-		 p->label_x);
+		 p->label_x[0] != '\0' ? p->label_x :
+					 x_axis_label_str(p->x_type));
 }
 
 static void paint_lgroup(struct plot *p, const struct lgroup *lg)
