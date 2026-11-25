@@ -55,6 +55,7 @@ enum {
 	ARG_WIN_BORDER_TYPE,
 	ARG_STDIN_BUFFER_BYTES,
 	ARG_ENABLE_STACKED_LINE_CHART,
+	ARG_VERTICAL_PLOTTING,
 };
 
 const char argp_prog_doc[] = ANSI_BOLD
@@ -153,6 +154,9 @@ static const struct argp_option opts[] = {
 	  "data series on top of one another, illustrating both the \"overall "
 	  "trend\" and the \"contribution of each individual series\" "
 	  "(shortcut " KEY_HELP_s ")." },
+	{ "vertical-plotting", ARG_VERTICAL_PLOTTING, NULL, 1,
+	  "Generally, the x-axis is horizontal and the y-axis is vertical; "
+	  "when plotting in a vertical orientation, the axes are swapped." },
 	{ "win-border", ARG_WIN_BORDER_TYPE, "[utf8]", 0,
 	  "Sets the border type for the pop-up window; currently, only 'utf8'"
 	  " and 'auto' are supported." },
@@ -165,6 +169,7 @@ static const struct argp_option opts[] = {
 };
 
 static int epollfd = -1;
+static int stdinfd = -1;
 static int sig_rd_fd, sig_wr_fd;
 static int ram = false;
 static int verbose = false;
@@ -177,6 +182,7 @@ static char *xlabel = NULL;
 static char *ylabel = NULL;
 static enum curve_type curve_type = CURVE_TYPE_NONE;
 static bool enable_stacked_line_chart = false;
+static bool vertical_plotting = false;
 static enum x_axis_type x_type = X_TIMEVAL;
 static enum ltype_enum axis_curve_type = LINE_TYPE_THIN_UNICODE;
 static enum win_border_type win_border_type = WIN_BORDER_TYPE_DEFAULT;
@@ -194,15 +200,6 @@ void sig_handler(int signo)
 		ret = write(sig_wr_fd, &signo, 1);
 	} while ((ret == -1) && (errno == EINTR));
 	errno = saved_errno;
-}
-
-/**
- * send to every process in the process group of the calling process, to make
- * sure the process preceding the pipeline exits.
- */
-void broadcast_sig(int signo)
-{
-	kill(0, signo);
 }
 
 static error_t parse_arg(int opt, char *arg, struct argp_state *state)
@@ -268,6 +265,9 @@ static error_t parse_arg(int opt, char *arg, struct argp_state *state)
 		break;
 	case ARG_ENABLE_STACKED_LINE_CHART:
 		enable_stacked_line_chart = true;
+		break;
+	case ARG_VERTICAL_PLOTTING:
+		vertical_plotting = true;
 		break;
 	case ARG_LINE_TYPES:
 		ltype_print_names(stdout);
@@ -368,11 +368,14 @@ struct loop_arg {
 
 static int tmout_handler(long fd, void *arg)
 {
-	struct loop_arg *a = arg;
 	uint64_t exp;
 	read(fd, &exp, sizeof(exp));
-	broadcast_sig(SIGINT);
-	a->should_end = true;
+	broadcast_signal(SIGINT);
+	/**
+	 * Note that we should not set should_end=true, because SIGINT will
+	 * trigger sig_handler(), sig_handler() write SIGINT to pipe, then,
+	 * sig_rd_handler() will handle SIGINT and set should_end=true.
+	 */
 	return 0;
 }
 
@@ -455,7 +458,7 @@ static int key_handler(long fd, void *arg)
 			a->redraw = true;
 			break;
 		case 'q': /* quit */
-			broadcast_sig(SIGINT);
+			broadcast_signal(SIGINT);
 			a->should_end = true;
 			break;
 		case 'v': /* verbose mode switch */
@@ -507,6 +510,14 @@ static int key_handler(long fd, void *arg)
 	return 0;
 }
 
+static void close_stdinfd(void)
+{
+	if (stdinfd != -1) {
+		close(stdinfd);
+		stdinfd = -1;
+	}
+}
+
 static int sig_rd_handler(long fd, void *arg)
 {
 	unsigned char signo;
@@ -516,17 +527,21 @@ static int sig_rd_handler(long fd, void *arg)
 	a->redraw = false;
 
 	const ssize_t cnt = read(fd, &signo, 1);
-	if (cnt > 0) {
-		if (signo == SIGINT) {
-			a->should_end = true;
-		} else if (signo == SIGWINCH) {
-			endwin();
-			plot->win = initscr();
-			werase(plot->win);
-			wrefresh(plot->win);
-			plot_update_size(plot, false);
-			a->redraw = true;
-		}
+	if (cnt <= 0) {
+		return -errno;
+	}
+
+	if (signo == SIGINT) {
+		/* close stdinfd (the pipe read peer) as early as possible. */
+		close_stdinfd();
+		a->should_end = true;
+	} else if (signo == SIGWINCH) {
+		endwin();
+		plot->win = initscr();
+		werase(plot->win);
+		wrefresh(plot->win);
+		plot_update_size(plot, false);
+		a->redraw = true;
 	}
 	return 0;
 }
@@ -550,7 +565,7 @@ static int stdinfd_handler(long fd, void *arg)
 int main(int argc, char *argv[])
 {
 	int err = 0;
-	int freshtimerfd, keyfd, stdinfd, tmout_exit_fd;
+	int freshtimerfd, keyfd, tmout_exit_fd;
 	int sigpipe[2];
 	struct loop_arg loop_arg;
 
@@ -644,7 +659,7 @@ int main(int argc, char *argv[])
 	if (tmout_nsecs != 0) {
 		tmout_exit_fd = new_timerfd(tmout_nsecs);
 		plotcake_poll_add_fd(tmout_exit_fd);
-		register_id(NULL, tmout_exit_fd, tmout_handler, &loop_arg);
+		register_id(NULL, tmout_exit_fd, tmout_handler, NULL);
 	}
 
 	plotcake_poll_add_fd(sig_rd_fd);
@@ -667,6 +682,7 @@ int main(int argc, char *argv[])
 
 	plot.curve_type = curve_type;
 	plot.enable_stacked_line_chart = enable_stacked_line_chart;
+	plot.vertical_plotting = vertical_plotting;
 
 	if (stdinfd == -1) {
 		if (!file && ram) {
@@ -706,10 +722,13 @@ int main(int argc, char *argv[])
 		int nfds = epoll_wait(epollfd, epollevents, 16, -1);
 		for (int i = 0; i < nfds; i++) {
 			int cur_fd = epollevents[i].data.fd;
-			if (handle_id(NULL, cur_fd) == -ENOENT)
+			if (handle_id(NULL, cur_fd) == -ENOENT) {
 				continue;
-			if (loop_arg.should_end)
+			}
+
+			if (loop_arg.should_end) {
 				goto end;
+			}
 
 			if (loop_arg.redraw) {
 				plot_redraw(&plot);
@@ -718,9 +737,10 @@ int main(int argc, char *argv[])
 	}
 
 end:
-	if (stdinfd != -1) {
-		close(stdinfd);
+	close_stdinfd();
+	if (stdin_buffer) {
 		free(stdin_buffer);
+		stdin_buffer = NULL;
 	}
 	if (freshtimerfd != -1)
 		close(freshtimerfd);

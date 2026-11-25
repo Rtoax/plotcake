@@ -32,17 +32,8 @@ struct plot {
 
 	bool debug;
 
-	/**
-	 * max indicates the maximum value your terminal has reached during the
-	 * entire program run (you can use the mouse to drag and adjust the
-	 * terminal size).
-	 *
-	 * `heightmax` represents the maximum height of the terminal window, and
-	 * `widthmax` represents the maximum width of the terminal window.
-	 */
-	int heightmax, widthmax;
 	/* Current terminal size */
-	int height, width;
+	int horizontal, vertical;
 	/**
 	 * The size of the drawing area, excluding boundaries, axes, line
 	 * labels.
@@ -64,6 +55,11 @@ struct plot {
 
 	struct {
 		int top, bottom, left, right;
+/* Initial plot boundary */
+#define BND_TOP(p) (p->vertical_plotting ? 7 : 1)
+#define BND_BOTTOM(p) (p->vertical_plotting ? 6 : 4)
+#define BND_LEFT(p) (p->vertical_plotting ? 3 : 7)
+#define BND_RIGHT(p) (p->vertical_plotting ? 6 : 6)
 	} bnd, bnd_prev_max;
 	struct lgroup *lghead, *lgtail;
 
@@ -71,6 +67,12 @@ struct plot {
 	unsigned long redrawcount;
 
 	enum curve_type curve_type;
+
+	/**
+	 * Generally, the x-axis is horizontal and the y-axis is vertical; when
+	 * plotting in a vertical orientation, the axes are swapped.
+	 */
+	bool vertical_plotting;
 
 	/**
 	 * A stacked line chart shows how multiple series cumulatively add up to
@@ -124,14 +126,14 @@ struct plot {
 #endif
 
 #define PLOT_INF0_FMT                                                                 \
-	"plot(redraw=%ld, %.3f MiB, win[%d,%d], max[%d,%d], plot[%d,%d], "            \
+	"plot(redraw=%ld, %.3f MiB, win[%d,%d], plot[%d,%d], "                        \
 	"scale %d, shft %ld/%ld, stacked %d" PLOT_DEBUG0_X_FMT PLOT_DEBUG0_DIALOG_FMT \
 	")"
-#define PLOT_INF0_ARG(p)                                                  \
-	p->redrawcount, plot_mem_size(p) * 1. / MiB, p->height, p->width, \
-		p->heightmax, p->widthmax, p->plotheight, p->plotwidth,   \
-		p->plotscaling, p->plotshift, plot_shift(p),              \
-		p->enable_stacked_line_chart PLOT_DEBUG0_X_ARG(p)         \
+#define PLOT_INF0_ARG(p)                                                    \
+	p->redrawcount, plot_mem_size(p) * 1. / MiB, plot_height(p),        \
+		plot_width(p), p->plotheight, p->plotwidth, p->plotscaling, \
+		p->plotshift, plot_shift(p),                                \
+		p->enable_stacked_line_chart PLOT_DEBUG0_X_ARG(p)           \
 			PLOT_DEBUG0_DIALOG_ARG(p)
 
 	WINDOW *win; /* equal to stdscr */
@@ -238,4 +240,7 @@ void plot_redraw(struct plot *p);
 void init_flavor(bool transparent_bg);
 chtype getflavor(enum lcolor_enum color);
 
-void __plot_debug_llabel(const struct lgroup *lg, int height);
+void __plot_debug_llabel(const struct lgroup *lg, int y, int x);
+
+int plot_height(const struct plot *p);
+int plot_width(const struct plot *p);

@@ -16,7 +16,7 @@
 #include "dialog.h"
 #include "plotcake.h"
 
-chtype colors[C_MAX] = { 0 };
+static chtype colors[C_MAX] = { 0 };
 static const char *verstring = GIT_REPO " " MY_VERSION;
 
 static int __paint_help_win(struct plot *p, bool init);
@@ -82,13 +82,23 @@ chtype getflavor(enum lcolor_enum color)
 	return colors[color];
 }
 
+int plot_height(const struct plot *p)
+{
+	return p->vertical_plotting ? p->horizontal : p->vertical;
+}
+
+int plot_width(const struct plot *p)
+{
+	return p->vertical_plotting ? p->vertical : p->horizontal;
+}
+
 void plot_update_size(struct plot *p, bool init)
 {
 	if (init) {
-		p->bnd.top = BND_TOP;
-		p->bnd.bottom = BND_BOTTOM;
-		p->bnd.left = BND_LEFT;
-		p->bnd.right = BND_RIGHT;
+		p->bnd.top = BND_TOP(p);
+		p->bnd.bottom = BND_BOTTOM(p);
+		p->bnd.left = BND_LEFT(p);
+		p->bnd.right = BND_RIGHT(p);
 	} else {
 		/**
 		 * Just use left and right to make sure y axis values and line
@@ -100,17 +110,18 @@ void plot_update_size(struct plot *p, bool init)
 		p->bnd.right = p->bnd.right > p->bnd_prev_max.right ?
 				       p->bnd.right :
 				       p->bnd_prev_max.right;
+		p->bnd.top = p->bnd.top > p->bnd_prev_max.top ?
+				     p->bnd.top :
+				     p->bnd_prev_max.top;
+		p->bnd.bottom = p->bnd.bottom > p->bnd_prev_max.bottom ?
+					p->bnd.bottom :
+					p->bnd_prev_max.bottom;
 	}
 
-	getmaxyx(p->win, p->height, p->width);
+	getmaxyx(p->win, p->vertical, p->horizontal);
 
-	p->plotheight = p->height - p->bnd.bottom - p->bnd.top;
-	p->plotwidth = p->width - p->bnd.left - p->bnd.right;
-
-	if (p->heightmax < p->height)
-		p->heightmax = p->height;
-	if (p->widthmax < p->width)
-		p->widthmax = p->width;
+	p->plotheight = plot_height(p) - p->bnd.bottom - p->bnd.top;
+	p->plotwidth = plot_width(p) - p->bnd.left - p->bnd.right;
 
 	/**
 	 * When refreshing or modifying the drawing type, the boundary size may
@@ -129,10 +140,10 @@ void plot_update_size(struct plot *p, bool init)
 		break;
 	}
 
-	p->bnd_prev_max.top = BND_TOP;
-	p->bnd_prev_max.bottom = BND_BOTTOM;
-	p->bnd_prev_max.left = BND_LEFT;
-	p->bnd_prev_max.right = BND_RIGHT;
+	p->bnd_prev_max.top = BND_TOP(p);
+	p->bnd_prev_max.bottom = BND_BOTTOM(p);
+	p->bnd_prev_max.left = BND_LEFT(p);
+	p->bnd_prev_max.right = BND_RIGHT(p);
 }
 
 void __plot_warning(const struct plot *p, char *fmt, ...)
@@ -143,7 +154,7 @@ void __plot_warning(const struct plot *p, char *fmt, ...)
 	vsnprintf(buff, 256, fmt, va);
 	va_end(va);
 	attron(colors[C_RED] | A_BOLD);
-	mvaddstr(p->height / 2, (p->width - strlen(buff)) / 2, buff);
+	mvaddstr(plot_height(p) / 2, (plot_width(p) - strlen(buff)) / 2, buff);
 	attroff(colors[C_RED] | A_BOLD);
 }
 
@@ -151,6 +162,7 @@ static int get_plot_value_heigh(const struct plot *p, double min, double max,
 				double v)
 {
 	double span = .0f, diff = .0f;
+	int ret;
 
 	if (max == min || max == 0.0 || max < min) {
 		diff = 0;
@@ -159,8 +171,16 @@ static int get_plot_value_heigh(const struct plot *p, double min, double max,
 		diff = v - min;
 		span = max - min;
 	}
-	return p->plotheight + p->bnd.top - 1 -
-	       diff * (p->plotheight - 2) / span;
+
+	int val = diff * (p->plotheight - 2) / span;
+
+	if (p->vertical_plotting) {
+		ret = p->bnd.bottom + 1 + val;
+	} else {
+		ret = p->plotheight + p->bnd.top - 1 - val;
+	}
+
+	return ret;
 }
 
 static double get_plot_value(const struct plot *p, const struct value *v)
@@ -186,9 +206,15 @@ static int paint_y0_line(const struct plot *p, double min, double max)
 		return 0;
 	}
 	double h = get_plot_value_heigh(p, min, max, 0);
+
 	attron(A_DIM);
-	for (int i = 0; i < p->plotwidth - 1; i++)
-		mvwprintw(p->win, h, p->bnd.left + 1 + i, "-");
+	for (int i = 0; i < p->plotwidth - 1; i++) {
+		if (p->vertical_plotting) {
+			mvwprintw(p->win, p->bnd.left + 1 + i, h, "|");
+		} else {
+			mvwprintw(p->win, h, p->bnd.left + 1 + i, "-");
+		}
+	}
 	attroff(A_DIM);
 	return 0;
 }
@@ -206,6 +232,7 @@ static void __paint_line(struct plot *p, const struct lgroup *lg,
 {
 	int iv;
 	int prev_h = -1;
+	bool is_last_v = false;
 	chtype color = colors[ln->color];
 
 	const long ln_shift_count = ln->count - shift;
@@ -243,6 +270,10 @@ static void __paint_line(struct plot *p, const struct lgroup *lg,
 			continue;
 		}
 
+		if (iv > start + len - p->plotscaling - 1) {
+			is_last_v = true;
+		}
+
 		double real_v = get_plot_value(p, v);
 
 		/**
@@ -273,7 +304,11 @@ static void __paint_line(struct plot *p, const struct lgroup *lg,
 		int w = p->plotwidth + p->bnd.left - (nvs - ivs);
 
 		attron(color);
-		ln->ops->horizon(p, p->win, h, w, 1);
+		if (p->vertical_plotting) {
+			ln->ops->vertical(p, p->win, w, h, 1);
+		} else {
+			ln->ops->horizon(p, p->win, h, w, 1);
+		}
 		attroff(color);
 
 		/**
@@ -284,15 +319,30 @@ static void __paint_line(struct plot *p, const struct lgroup *lg,
 		if (prev_h != -1) {
 			attron(color);
 			if (prev_h > h) {
-				ln->ops->lrcorner(p, p->win, prev_h, w);
-				ln->ops->ulcorner(p, p->win, h, w);
-				ln->ops->vertical(p, p->win, h + 1, w,
-						  prev_h - h - 1);
+				if (p->vertical_plotting) {
+					ln->ops->lrcorner(p, p->win, w, prev_h);
+					ln->ops->ulcorner(p, p->win, w, h);
+					ln->ops->horizon(p, p->win, w, h + 1,
+							 prev_h - h - 1);
+				} else {
+					ln->ops->lrcorner(p, p->win, prev_h, w);
+					ln->ops->ulcorner(p, p->win, h, w);
+					ln->ops->vertical(p, p->win, h + 1, w,
+							  prev_h - h - 1);
+				}
 			} else if (h > prev_h) {
-				ln->ops->urcorner(p, p->win, prev_h, w);
-				ln->ops->llcorner(p, p->win, h, w);
-				ln->ops->vertical(p, p->win, prev_h + 1, w,
-						  h - prev_h - 1);
+				if (p->vertical_plotting) {
+					ln->ops->llcorner(p, p->win, w, prev_h);
+					ln->ops->urcorner(p, p->win, w, h);
+					ln->ops->horizon(p, p->win, w,
+							 prev_h + 1,
+							 h - prev_h - 1);
+				} else {
+					ln->ops->urcorner(p, p->win, prev_h, w);
+					ln->ops->llcorner(p, p->win, h, w);
+					ln->ops->vertical(p, p->win, prev_h + 1,
+							  w, h - prev_h - 1);
+				}
 			}
 			attroff(color);
 		}
@@ -300,20 +350,35 @@ static void __paint_line(struct plot *p, const struct lgroup *lg,
 		prev_h = h;
 
 		/* set x axis */
-		if ((ivs - 1) % 10 == 0) {
-			switch (p->x_type) {
-			case X_TIMEVAL: {
-				char buf[32];
-				mvprintw(p->height - p->bnd.bottom + 1, w, "%s",
-					 timeval_str(&v->x_v.tv, buf));
-				break;
+		if ((ivs - 1) % (p->vertical_plotting ? 1 : 10) == 0) {
+			int y, x, n = 0;
+			char buf[32];
+
+			if (p->vertical_plotting) {
+				y = w;
+				x = 0;
+			} else {
+				y = plot_height(p) - p->bnd.bottom + 1;
+				x = w;
 			}
+			switch (p->x_type) {
+			case X_TIMEVAL:
+				timeval_str(&v->x_v.tv, buf);
+				n = strlen(buf);
+				break;
 			case X_INDEX:
-				mvprintw(p->height - p->bnd.bottom + 1, w,
-					 "%ld", v->x_v.idx);
+				n = snprintf(buf, sizeof(buf), "%ld",
+					     v->x_v.idx);
 				break;
 			default:
 				break;
+			}
+			mvprintw(y, x, "%s", buf);
+
+			/* vertical plotting need update bottom boundary size */
+			if (p->vertical_plotting &&
+			    p->bnd_prev_max.bottom < n) {
+				p->bnd_prev_max.bottom = n;
 			}
 		}
 
@@ -322,45 +387,69 @@ static void __paint_line(struct plot *p, const struct lgroup *lg,
 		int nc;
 		int sz = sizeof(sv);
 
-		if (p->curve_type == CURVE_TYPE_LOGARITHMIC)
+		if (p->curve_type == CURVE_TYPE_LOGARITHMIC) {
 			nc = snprintf(sv, sz, "s*log(1+|%.3f|)=%.3f", v->v,
 				      real_v);
-		else if (p->curve_type == CURVE_TYPE_LOGARITHMIC10)
+		} else if (p->curve_type == CURVE_TYPE_LOGARITHMIC10) {
 			nc = snprintf(sv, sz, "s*log10(1+|%.3f|)=%.3f", v->v,
 				      real_v);
-		else if (p->curve_type == CURVE_TYPE_EXPONENTIAL)
+		} else if (p->curve_type == CURVE_TYPE_EXPONENTIAL) {
 			nc = snprintf(sv, sz, "exp(%.3f)=%.3f", v->v, real_v);
-		else if (p->curve_type == CURVE_TYPE_DELTA &&
-			 !p->enable_stacked_line_chart)
+		} else if (p->curve_type == CURVE_TYPE_DELTA &&
+			   !p->enable_stacked_line_chart) {
 			nc = snprintf(sv, sz, "delta(%.3f-%.3f)=%.3f",
 				      v->next->v, v->v, real_v);
-		else
+		} else {
 			nc = snprintf(sv, sz, "%.3f", real_v);
+		}
 
 		if (p->enable_stacked_line_chart && plot_v != real_v) {
 			nc += snprintf(sv + strlen(sv), sz - strlen(sv),
 				       "[%.3f]", plot_v);
 		}
 
-		if (p->bnd_prev_max.left < nc)
+		/* horizontal plotting need update bottom boundary size */
+		if (!p->vertical_plotting && p->bnd_prev_max.left < nc) {
 			p->bnd_prev_max.left = nc;
+		}
 
 		attron(color);
-		mvprintw(h, 0, "%s", sv);
+		if (p->vertical_plotting && is_last_v) {
+			/**
+			 * TODO: Printing should be better here, right now, we
+			 * just print last value, however.
+			 */
+			mvprintw(p->bnd.left - 1, h, "%s", sv);
+		} else {
+			mvprintw(h, 0, "%s", sv);
+		}
 		attroff(color);
 
 print_llabel:
 		attron(color);
 		if (iv + 1 + p->plotscaling > ln_shift_count) {
-			mvprintw(h, w + 1, "%s", ln->name);
-			nc = strlen(ln->name);
-			if (p->bnd_prev_max.right < nc)
-				p->bnd_prev_max.right = nc;
+			if (p->vertical_plotting) {
+				int y = p->plotwidth + p->bnd.left;
+				mvprintw(y, h, "%s", ln->name);
+				if (p->debug) {
+					mvprintw(y + 1, h, "%ld", ln->count);
+					mvprintw(y + 2, h, "%.1f", ln->min->v);
+					mvprintw(y + 3, h, "%.1f", ln->max->v);
+				}
+			} else {
+				mvprintw(h, w + 1, "%s", ln->name);
+				nc = strlen(ln->name);
+				if (p->bnd_prev_max.right < nc)
+					p->bnd_prev_max.right = nc;
 
-			if (p->debug) {
-				mvprintw(h + 1, w + 1, "%ld", ln->count);
-				mvprintw(h + 2, w + 1, "%.1f", ln->min->v);
-				mvprintw(h + 3, w + 1, "%.1f", ln->max->v);
+				if (p->debug) {
+					mvprintw(h + 1, w + 1, "%ld",
+						 ln->count);
+					mvprintw(h + 2, w + 1, "%.1f",
+						 ln->min->v);
+					mvprintw(h + 3, w + 1, "%.1f",
+						 ln->max->v);
+				}
 			}
 		}
 		attroff(color);
@@ -370,6 +459,7 @@ print_llabel:
 static void __draw_title(const struct plot *p)
 {
 	char buf[sizeof(p->title) + 128];
+	int col = p->vertical_plotting ? plot_height(p) : plot_width(p);
 
 	if (p->curve_type == CURVE_TYPE_LOGARITHMIC)
 		snprintf(buf, sizeof(buf), "%s (signed logarithmic)", p->title);
@@ -389,44 +479,107 @@ static void __draw_title(const struct plot *p)
 	}
 
 	wattron(p->win, colors[C_BLUE] | A_BOLD);
-	mvaddstr(0, (p->width - strlen(buf)) / 2, buf);
+	mvaddstr(0, (col - strlen(buf)) / 2, buf);
 	wattroff(p->win, colors[C_BLUE] | A_BOLD);
 
 	if (p->debug) {
 		char buf2[64];
 		snprintf(buf2, sizeof(buf2), "<pid:%d>", getpid());
-		mvaddstr(1, (p->width - strlen(buf2)) / 2, buf2);
+		mvaddstr(1, (col - strlen(buf2)) / 2, buf2);
 	}
 }
 
 static void __draw_axes(const struct plot *p)
 {
 	const struct ltype_ops *ops = ltype_type2ops(p->axis_curve_type);
+	const char *labelx = p->label_x[0] != '\0' ?
+				     p->label_x :
+				     x_axis_label_str(p->x_type);
 
-	ops->horizon(p, p->win, p->plotheight + p->bnd.top, p->bnd.left,
-		     p->plotwidth);
-	ops->vertical(p, p->win, p->bnd.top, p->bnd.left, p->plotheight);
-	ops->llcorner(p, p->win, p->plotheight + p->bnd.top, p->bnd.left);
-	ops->uarrow(p, p->win, p->bnd.top, p->bnd.left);
-	ops->rarrow(p, p->win, p->plotheight + p->bnd.top,
-		    p->plotwidth + p->bnd.left);
+	if (p->vertical_plotting) {
+		/* x axis */
+		ops->vertical(p, p->win, p->bnd.left, p->bnd.bottom,
+			      p->plotwidth);
+		ops->darrow(p, p->win, p->plotwidth + p->bnd.left,
+			    p->bnd.bottom);
+		/* y axis */
+		ops->horizon(p, p->win, p->bnd.left, p->bnd.bottom,
+			     p->plotheight);
+		ops->rarrow(p, p->win, p->bnd.left,
+			    p->plotheight + p->bnd.bottom);
+		/* [0,0] corner */
+		ops->ulcorner(p, p->win, p->bnd.left, p->bnd.bottom);
+		/* y axis labels */
+		mvaddstr(p->bnd.left - 2,
+			 p->plotheight + p->bnd.bottom + p->bnd.top -
+				 strlen(p->label_y),
+			 p->label_y);
+		/* x axis labels */
+		mvaddstr(p->plotwidth + p->bnd.left + 1, 1, labelx);
+	} else {
+		/* x axis */
+		ops->horizon(p, p->win, p->plotheight + p->bnd.top, p->bnd.left,
+			     p->plotwidth);
+		ops->rarrow(p, p->win, p->plotheight + p->bnd.top,
+			    p->plotwidth + p->bnd.left);
+		/* y axis */
+		ops->vertical(p, p->win, p->bnd.top, p->bnd.left,
+			      p->plotheight);
+		ops->uarrow(p, p->win, p->bnd.top, p->bnd.left);
+		/* [0,0] corner */
+		ops->llcorner(p, p->win, p->plotheight + p->bnd.top,
+			      p->bnd.left);
 
-	/* x/y axis labels */
-	mvaddstr(p->bnd.top - 1, p->bnd.left, p->label_y);
-	/**
-	 * If an x-axis label is set, display it directly; otherwise, adjust the
-	 * x-axis label based on the type.
-	 */
-	mvaddstr(p->plotheight + p->bnd.top + 1, p->plotwidth + p->bnd.left,
-		 p->label_x[0] != '\0' ? p->label_x :
-					 x_axis_label_str(p->x_type));
+		/* x/y axis labels */
+		mvaddstr(p->bnd.top - 1, p->bnd.left, p->label_y);
+		/**
+		 * If an x-axis label is set, display it directly; otherwise,
+		 * adjust the x-axis label based on the type.
+		 */
+		mvaddstr(p->plotheight + p->bnd.top + 1,
+			 p->plotwidth + p->bnd.left, labelx);
+	}
+}
+
+static void __draw_footer(const struct plot *p)
+{
+	char hostname[64];
+	char ts[128] = { 0 };
+	time_t sec;
+	struct tm *tm;
+	int h, w;
+
+	sec = time(NULL);
+	tm = localtime(&sec);
+	asctime_r(tm, ts);
+	ts[strlen(ts) - 1] = '\0';
+
+	gethostname(hostname, sizeof(hostname));
+
+	if (p->vertical_plotting) {
+		h = plot_width(p);
+		w = plot_height(p);
+	} else {
+		h = plot_height(p);
+		w = plot_width(p);
+	}
+
+	mvaddstr(h - 2, w - strlen(ts) - strlen(hostname) - 2, ts);
+	mvaddstr(h - 2, w - strlen(hostname) - 1, hostname);
+
+	mvaddstr(h - 1, w - strlen(verstring) - 1, verstring);
+
+	if (p->debug) {
+		mvprintw(h - 2, 0, PLOT_INF0_FMT, PLOT_INF0_ARG(p));
+		mvprintw(h - 1, 0, KEYBOARD_INF0_FMT, KEYBOARD_INF0_ARG(p->kb));
+	}
 }
 
 static void paint_lgroup(struct plot *p, const struct lgroup *lg)
 {
 	double max, min, max_stacked, min_stacked;
 	int start = -1;
-	int len = p->plotwidth * p->plotscaling;
+	int draw_len = p->plotwidth * p->plotscaling;
 	unsigned long shift = plot_shift(p);
 	bool first_line = true;
 	unsigned long max_nr_values = 0;
@@ -457,18 +610,20 @@ static void paint_lgroup(struct plot *p, const struct lgroup *lg)
 			p->plotshift = shift = 0;
 		}
 
-		start = l->count - len - shift;
+		start = l->count - draw_len - shift;
 
 		double _max, _min;
 		if (p->curve_type == CURVE_TYPE_DELTA &&
 		    !p->enable_stacked_line_chart) {
 			_max = line_range_delta_max(l, start, p->plotscaling,
-						    len);
+						    draw_len);
 			_min = line_range_delta_min(l, start, p->plotscaling,
-						    len);
+						    draw_len);
 		} else {
-			_max = line_range_max(l, start, p->plotscaling, len);
-			_min = line_range_min(l, start, p->plotscaling, len);
+			_max = line_range_max(l, start, p->plotscaling,
+					      draw_len);
+			_min = line_range_min(l, start, p->plotscaling,
+					      draw_len);
 		}
 
 		switch (p->curve_type) {
@@ -529,7 +684,7 @@ static void paint_lgroup(struct plot *p, const struct lgroup *lg)
 	{
 		if (l->count <= 0)
 			continue;
-		__paint_line(p, lg, l, start, len, shift,
+		__paint_line(p, lg, l, start, draw_len, shift,
 			     p->enable_stacked_line_chart ? max_stacked : max,
 			     p->enable_stacked_line_chart ? min_stacked : min,
 			     stacked_line, first_line);
@@ -544,24 +699,22 @@ static void paint_lgroup(struct plot *p, const struct lgroup *lg)
 		lg->ops->plot_debug(lg, lg->ops->arg);
 }
 
-void __plot_debug_llabel(const struct lgroup *lg, int height)
+void __plot_debug_llabel(const struct lgroup *lg, int y, int x)
 {
 	int i = 0;
-	struct plot *p = lg->plot;
 
 	for_each_line(lg, ln)
 	{
 		chtype color = getflavor(ln->color);
 		attron(color);
 		if (ln->count <= 0)
-			mvprintw(i + height, p->bnd.left + 1, "%d: %s: %ld",
-				 ln->id, ln->name, ln->count);
+			mvprintw(i + y, x, "%d: %s: %ld", ln->id, ln->name,
+				 ln->count);
 		else {
 			char buf[64];
 
-			mvprintw(i + height, p->bnd.left + 1,
-				 "%d: %s: %ld %f x(%s) y(%lf~%lf)", ln->id,
-				 ln->name, ln->count, ln->tail->v,
+			mvprintw(i + y, x, "%d: %s: %ld %f x(%s) y(%lf~%lf)",
+				 ln->id, ln->name, ln->count, ln->tail->v,
 				 x_axis_range_str(lg->plot->x_type,
 						  &ln->x_range, buf),
 				 ln->min->v, ln->max->v);
@@ -576,11 +729,6 @@ void __plot_debug_llabel(const struct lgroup *lg, int height)
  */
 static void __paint_plot(struct plot *p)
 {
-	char hostname[64];
-	char ts[128] = { 0 };
-	time_t sec;
-	struct tm *tm;
-
 	__draw_title(p);
 	__draw_axes(p);
 
@@ -589,24 +737,7 @@ static void __paint_plot(struct plot *p)
 		paint_lgroup(p, lg);
 	}
 
-	sec = time(NULL);
-	tm = localtime(&sec);
-	asctime_r(tm, ts);
-	ts[strlen(ts) - 1] = '\0';
-
-	gethostname(hostname, sizeof(hostname));
-
-	mvaddstr(p->height - 2, p->width - strlen(ts) - strlen(hostname) - 2,
-		 ts);
-	mvaddstr(p->height - 2, p->width - strlen(hostname) - 1, hostname);
-
-	mvaddstr(p->height - 1, p->width - strlen(verstring) - 1, verstring);
-
-	if (p->debug) {
-		mvprintw(p->height - 2, 0, PLOT_INF0_FMT, PLOT_INF0_ARG(p));
-		mvprintw(p->height - 1, 0, KEYBOARD_INF0_FMT,
-			 KEYBOARD_INF0_ARG(p->kb));
-	}
+	__draw_footer(p);
 
 	move(0, 0);
 }
@@ -728,8 +859,14 @@ static int __paint_help_win(struct plot *p, bool init)
 	if (!init && !win)
 		return 0;
 
-	h = p->plotheight / 2 + p->bnd.top - ARRAY_SIZE(key_helps) / 2;
-	w = p->plotwidth / 2 + p->bnd.left - max_key_help_len() / 2;
+	if (p->vertical_plotting) {
+		h = p->plotwidth / 2 + p->bnd.left - ARRAY_SIZE(key_helps) / 2;
+		w = p->plotheight / 2 + p->bnd.bottom - max_key_help_len() / 2;
+	} else {
+		h = p->plotheight / 2 + p->bnd.top - ARRAY_SIZE(key_helps) / 2;
+		w = p->plotwidth / 2 + p->bnd.left - max_key_help_len() / 2;
+	}
+
 	n = sizeof(key_helps) / sizeof(key_helps[0]);
 
 	if (init && win) {
@@ -756,7 +893,7 @@ static int __paint_help_win(struct plot *p, bool init)
  */
 static int __paint_llabels_win(struct plot *p, bool init)
 {
-	int ret = 0, i, nline = 0;
+	int ret = 0, i, nline = 0, h, w;
 	int max_name_len = 0;
 	WINDOW *win = p->llabels.win;
 	const int n = 6;
@@ -779,8 +916,13 @@ static int __paint_llabels_win(struct plot *p, bool init)
 		}
 	}
 
-	int h = p->plotheight / 2 + p->bnd.top - (nline / 2) - 1;
-	int w = p->plotwidth / 2 + p->bnd.left - (max_name_len + n) / 2;
+	if (p->vertical_plotting) {
+		h = p->plotwidth / 2 + p->bnd.left - (nline / 2) - 1;
+		w = p->plotheight / 2 + p->bnd.bottom - (max_name_len + n) / 2;
+	} else {
+		h = p->plotheight / 2 + p->bnd.top - (nline / 2) - 1;
+		w = p->plotwidth / 2 + p->bnd.left - (max_name_len + n) / 2;
+	}
 
 	if (init && win) {
 		ret = 2;

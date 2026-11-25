@@ -12,6 +12,21 @@ uprobe:./plotcake:exec_key_handler
 	       "exec_key_handler()", ustack);
 }
 
+uprobe:./plotcake:sig_handler,
+uprobe:./plotcake:sig_rd_handler,
+uprobe:./plotcake:handle_id
+{
+	printf("%s %s %d\n", probe, comm, arg0);
+}
+
+uretprobe:./plotcake:main,
+uretprobe:./plotcake:sig_handler,
+uretprobe:./plotcake:sig_rd_handler,
+uretprobe:./plotcake:handle_id
+{
+	printf("%s %s %d\n", probe, comm, retval);
+}
+
 tracepoint:syscalls:sys_enter_close
 {
 	if (comm == "plotcake") {
